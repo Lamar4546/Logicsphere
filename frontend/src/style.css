@@ -1,0 +1,118 @@
+/*
+  Design direction: a night-shift port control tower, not a SaaS dashboard
+  template. Deep slate/ink background (the operations floor at 2am),
+  a single signal-amber accent (the color of hazard lights and manifest
+  stamps on a dock), monospace for anything that's an identifier or a
+  number, a plain grotesk for everything a human reads as prose.
+
+  Palette:
+    --ink        #0B0F14  page background
+    --panel      #121821  card/panel surface
+    --panel-2    #182230  raised surface (hover, nested cards)
+    --line       #263244  hairline borders
+    --text       #E7ECF2  primary text
+    --text-dim   #8B99AC  secondary text
+    --signal     #F2A93B  amber accent — attention, action, brand mark
+    --risk-low     #4E9F6E
+    --risk-medium  #D9A441
+    --risk-high    #D9713C
+    --risk-critical #D14343
+*/
+
+:root {
+  --ink: #0B0F14;
+  --panel: #121821;
+  --panel-2: #182230;
+  --line: #263244;
+  --text: #E7ECF2;
+  --text-dim: #8B99AC;
+  --signal: #F2A93B;
+  --risk-low: #4E9F6E;
+  --risk-medium: #D9A441;
+  --risk-high: #D9713C;
+  --risk-critical: #D14343;
+
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.mono { font-family: var(--font-mono); }
+
+.dim { color: var(--text-dim); }
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+button:hover { border-color: var(--signal); }
+button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+button.primary {
+  background: var(--signal);
+  color: #1A1200;
+  border-color: var(--signal);
+  font-weight: 600;
+}
+button.primary:hover { background: #FFC266; }
+
+button.ghost {
+  background: transparent;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input, textarea {
+  font-family: var(--font-body);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+}
+input:focus, textarea:focus {
+  outline: 2px solid var(--signal);
+  outline-offset: 1px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
