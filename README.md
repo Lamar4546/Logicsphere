@@ -20,11 +20,14 @@ fully wired from data entry to executed action:
    recommendation — with facts, predictions, and recommended action kept
    separate (SRS §14.2 explainability).
 5. Shipment shows as "at risk" on the Command Center.
-6. A human reviews and **approves or rejects** the recommendation
-   (SRS §14.1 human-in-the-loop — nothing executes without this step).
-7. On approval, the **Communication Agent** drafts a customer update.
-8. A human approves the draft, which **executes the workflow** and writes
-   an audit record (SRS §13.1 NFR-006).
+6. The Central Manager applies policy: routine operational work completes
+   automatically; **critical risks and monetary commitments** pause for human
+   approval.
+7. The **Communication Agent** drafts routine customer updates; the
+   notification service delivers approved auto-send drafts through the chosen
+   provider and records every outcome.
+   Once a human approves an exception, the remaining workflow completes and
+   is recorded in the audit trail (SRS §13.1 NFR-006).
 
 Every agent run is logged to `agent_runs` (success or failure) and every
 material step to `audit_events` — so the system is observable and
@@ -59,12 +62,11 @@ supabase/
 
 ### Design principle carried over from the buildathon build
 
-AI agents produce **observations, predictions, and recommendations** —
-never direct actions on money, inventory, or commitments. Every
-recommendation requires human approval before the Communication Agent's
-draft can be sent and the workflow marked complete. This mirrors the
-project's existing rule that deterministic backend logic — not the AI —
-owns anything transactional.
+AI agents can autonomously complete routine, non-financial logistics work
+through the controlled execution layer. Critical incidents and anything that
+creates a monetary or commercial commitment require human approval. The AI
+does not directly execute those sensitive actions; deterministic backend
+logic owns the approved transactional boundary.
 
 ## Running it
 
@@ -82,6 +84,26 @@ Run `supabase/schema.sql` against a Supabase project (SQL editor or CLI).
 You'll need at least one row in `organizations` and one in `app_users` to
 demo against — insert manually for now; onboarding (§10.1) is a later slice.
 
+For the Operations workspace, also run
+`supabase/migrations/005_operations_control_plane.sql`. It creates the
+organization-scoped orders, dispatch tasks, inventory, proof-of-delivery, and
+returns records used by the operations agents.
+
+Then run `supabase/migrations/006_live_tracking_notifications.sql`. It adds
+shipment contact preferences and the `notification_log` audit trail required
+for delivery status and the live-notification workflow.
+
+Run `supabase/migrations/007_carrier_and_erp_wms_integrations.sql` to enable
+carrier delivery assignments, WMS inventory imports, ERP financial-record
+imports, and integration audit logs. Configure the provider URL in the
+integration connections API and keep its API token in a matching backend
+environment variable (for example `CARRIER_API_TOKEN`), never in the browser.
+
+Run `supabase/migrations/007_carrier_and_erp_wms_integrations.sql` to enable
+carrier assignments plus inbound WMS inventory and ERP financial-record sync.
+Configure each external connection in `integration_connections`; keep its
+secret only in the server environment using the row's `auth_env_key` value.
+
 ### Frontend
 ```bash
 cd frontend
@@ -92,6 +114,43 @@ npm install
 npm run dev
 ```
 Vite proxies `/api` to `localhost:5000`.
+
+### Live map and notification sandbox
+
+The tracking map uses Leaflet with OpenStreetMap tiles and does not need a
+Google Maps key. A carrier, driver, or GPS adapter can update the displayed
+marker with `POST /api/shipments/<shipment_id>/tracking` using `latitude`,
+`longitude`, and optionally `eta_current` and `last_event_description`. The
+Command Center polls every 15 seconds and updates the selected shipment's
+marker.
+
+For safe testing, keep `SENDGRID_SANDBOX_MODE=true`. Add Twilio sandbox/test
+credentials and a SendGrid sandbox sender only to `backend/.env`; never put
+these credentials in the frontend. Every provider attempt is recorded in
+`notification_log`, including missing credentials and provider failures.
+
+Run sender-only tests without the agents or a database:
+
+```bash
+cd backend
+python -m unittest tests.test_sender
+```
+
+### Observe the agent workflow
+
+Add `MINIMAX_API_KEY` (and optionally `MINIMAX_MODEL`) to `backend/.env`,
+start the backend, then run:
+
+```bash
+cd backend
+python demo_agent_workflow.py
+```
+
+The demo creates an 8-hour delay that is resolved autonomously and an
+80-hour critical delay that appears in the Command Center's **Exceptions**
+tab for human approval. Its printed `ai_provider` should be `minimax`; if
+MiniMax is unavailable it will be `deterministic_fallback` and the logistics
+workflow still completes safely.
 
 ## What's deliberately NOT in this slice
 

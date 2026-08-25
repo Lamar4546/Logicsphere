@@ -11,6 +11,10 @@ const form = reactive({
   eta_original: '',
   eta_current: '',
   last_event_description: '',
+  customer_contact: '',
+  preferred_contact_channel: 'email',
+  current_latitude: '',
+  current_longitude: '',
 })
 const submitting = ref(false)
 const error = ref('')
@@ -19,14 +23,17 @@ async function submit() {
   submitting.value = true
   error.value = ''
   try {
+    const payload = { ...form, status: 'in_transit', source_system: 'manual_demo_entry' }
+    for (const field of ['current_latitude', 'current_longitude']) {
+      if (payload[field] === '') delete payload[field]
+      else payload[field] = Number(payload[field])
+    }
     await api.createShipment({
-      ...form,
-      status: 'in_transit',
-      source_system: 'manual_demo_entry',
+      ...payload,
     })
     Object.assign(form, {
       reference_number: '', origin: '', destination: '',
-      eta_original: '', eta_current: '', last_event_description: '',
+      eta_original: '', eta_current: '', last_event_description: '', customer_contact: '', preferred_contact_channel: 'email', current_latitude: '', current_longitude: '',
     })
     emit('created')
   } catch (err) {
@@ -59,6 +66,13 @@ async function submit() {
       </label>
     </div>
     <input v-model="form.last_event_description" placeholder="Last tracking event (optional)" />
+    <div class="row">
+      <input v-model="form.customer_contact" placeholder="Customer email or phone (enables delivery updates)" />
+      <select v-model="form.preferred_contact_channel" aria-label="Preferred notification channel">
+        <option value="email">Email</option><option value="sms">SMS</option><option value="whatsapp">WhatsApp</option>
+      </select>
+    </div>
+    <details class="location-fields"><summary>Add live map position <span>optional</span></summary><div class="row"><input v-model="form.current_latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude (e.g. 18.0179)" /><input v-model="form.current_longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude (e.g. -76.8099)" /></div></details>
     <div class="row actions">
       <button type="submit" class="primary" :disabled="submitting">
         {{ submitting ? 'Adding…' : 'Add Shipment' }}
@@ -85,6 +99,8 @@ async function submit() {
   gap: 0.6rem;
 }
 .row input { flex: 1; }
+.row select { min-width: 8rem; }
+.location-fields{font-size:.75rem;color:var(--text-dim)}.location-fields summary{cursor:pointer;margin-bottom:.55rem}.location-fields summary span{font-size:.68rem}
 .field {
   flex: 1;
   display: flex;

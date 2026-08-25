@@ -1,22 +1,23 @@
 """
-Executes SRS §10.2 steps 8-11 once a human has reviewed a recommendation:
+Executes the exceptional-path workflow once a human has reviewed a
+critical or monetary recommendation:
   8. Communication Agent prepares supplier/customer communication if required.
   9. User approves or edits the communication/action.
   10. Approved workflow executes.
   11. System records the event and outcome.
 
-This is the "controlled automation" principle from SRS §23: the AI never
-moves straight from recommendation to executed action without a human
-approval step in between (SRS §14.1).
+Routine workflows are completed by the Central AI Logistics Manager. This
+module is deliberately limited to the human-gated exceptions.
 """
 from datetime import datetime, timezone
 from .supabase_client import get_client
 from ..agents.communication_agent import CommunicationAgent
+from ..autonomy.execution_engine import ExecutionEngine
+from .notification_service import deliver
 
 
 def approve_recommendation(organization_id: str, recommendation_id: str, reviewed_by: str, notes: str | None = None):
-    """Step 7 (user reviews) -> triggers step 8 (draft communication) and
-    creates the workflow record that step 9/10 will execute against."""
+    """Approve an exception and complete its remaining work automatically."""
     db = get_client()
 
     rec = (
@@ -56,6 +57,31 @@ def approve_recommendation(organization_id: str, recommendation_id: str, reviewe
         recommendation=rec,
     )
 
+    now = datetime.now(timezone.utc).isoformat()
+    is_critical = any("critical" in str(item).lower() for item in (rec.get("predictions") or []))
+    action_result = None
+    if is_critical:
+        # The approval authorizes the commercial expedite decision. The
+        # execution itself stays inside the controlled execution boundary.
+        action_result = ExecutionEngine(db).execute(
+            organization_id,
+            {"action": "BOOK_CARRIER", "shipment_id": shipment["id"], "risk_severity": "critical"},
+        )
+
+    communication_id = comm_output.data.get("communication_id")
+    delivery = None
+    if communication_id:
+        communication = db.table("communications").select("subject, body").eq("id", communication_id).eq("organization_id", organization_id).single().execute().data
+        delivery = deliver(
+            organization_id, shipment["id"], shipment.get("preferred_contact_channel", "email"),
+            shipment.get("customer_contact"), communication.get("body", ""), subject=communication.get("subject"),
+            communication_id=communication_id, triggered_by="user",
+        )
+        if delivery["success"]:
+            db.table("communications").update(
+                {"status": "sent", "approved_by": reviewed_by, "approved_at": now}
+            ).eq("id", communication_id).eq("organization_id", organization_id).execute()
+
     workflow = db.table("workflows").insert(
         {
             "organization_id": organization_id,
@@ -63,11 +89,14 @@ def approve_recommendation(organization_id: str, recommendation_id: str, reviewe
             "entity_type": "shipment",
             "entity_id": shipment["id"],
             "recommendation_id": recommendation_id,
-            "status": "pending",
+            "status": "completed",
             "steps_log": [
-                {"step": "recommendation_approved", "by": reviewed_by, "at": datetime.now(timezone.utc).isoformat()},
-                {"step": "communication_drafted", "detail": comm_output.to_dict()},
+                {"step": "exception_approved", "by": reviewed_by, "at": now},
+                {"step": "approved_action_executed", "detail": action_result, "at": now},
+                {"step": "notification_delivery", "detail": delivery, "at": now},
             ],
+            "started_at": now,
+            "completed_at": now,
         }
     ).execute()
 
@@ -87,6 +116,8 @@ def approve_recommendation(organization_id: str, recommendation_id: str, reviewe
         "recommendation_id": recommendation_id,
         "workflow_id": workflow.data[0]["id"] if workflow.data else None,
         "communication": comm_output.to_dict(),
+        "notification": delivery,
+        "status": "completed",
     }
 
 
@@ -117,14 +148,6 @@ def approve_communication_and_execute(organization_id: str, workflow_id: str, co
     -> step 11 (record event and outcome)."""
     db = get_client()
 
-    db.table("communications").update(
-        {
-            "status": "approved",
-            "approved_by": approved_by,
-            "approved_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", communication_id).eq("organization_id", organization_id).execute()
-
     workflow = (
         db.table("workflows")
         .select("*")
@@ -135,6 +158,29 @@ def approve_communication_and_execute(organization_id: str, workflow_id: str, co
     ).data
     if not workflow:
         raise ValueError("Workflow not found for this organization.")
+
+    communication = (
+        db.table("communications")
+        .select("id, recommendation_id, status")
+        .eq("id", communication_id)
+        .eq("organization_id", organization_id)
+        .single()
+        .execute()
+    ).data
+    if not communication:
+        raise ValueError("Communication not found for this organization.")
+    if communication.get("recommendation_id") != workflow.get("recommendation_id"):
+        raise ValueError("Communication does not belong to this workflow.")
+    if workflow.get("status") != "pending" or communication.get("status") != "draft":
+        raise ValueError("Workflow or communication has already been processed.")
+
+    db.table("communications").update(
+        {
+            "status": "approved",
+            "approved_by": approved_by,
+            "approved_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", communication_id).eq("organization_id", organization_id).execute()
 
     steps_log = workflow.get("steps_log") or []
     steps_log.append(

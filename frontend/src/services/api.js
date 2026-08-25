@@ -1,61 +1,253 @@
 const BASE = '/api'
 
-// Demo scope: org/user IDs are hardcoded until org auth/onboarding (SRS §8.1)
-// is built in a later slice. Swap for real auth session values then.
-export const DEMO_ORG_ID = import.meta.env.VITE_DEMO_ORG_ID || ''
-export const DEMO_USER_ID = import.meta.env.VITE_DEMO_USER_ID || ''
+const AUTH_TOKEN_KEY = 'ls_token'
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.error || `Request failed: ${res.status}`)
+export function setAuthToken(token) {
+  if (token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token)
   }
-  return res.json()
 }
 
-export const api = {
-  getCommandCenterSummary(orgId = DEMO_ORG_ID) {
-    return request(`/command-center/summary?organization_id=${orgId}`)
-  },
-  listShipments(orgId = DEMO_ORG_ID) {
-    return request(`/shipments?organization_id=${orgId}`)
-  },
-  createShipment(payload) {
-    return request('/shipments', {
+export function clearAuthToken() {
+  localStorage.removeItem(AUTH_TOKEN_KEY)
+}
+
+export function getAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_KEY) || ''
+}
+
+export function logout() {
+  clearAuthToken()
+  localStorage.removeItem('ls_user')
+}
+
+async function request(path, options = {}) {
+  const token = getAuthToken()
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  }
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  console.log(`[API] ${options.method || 'GET'} ${path}`)
+  console.log('[API] Token present:', !!token)
+
+  const response = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers,
+  })
+
+  const body = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    console.error('[API ERROR]', response.status, body)
+
+    if (response.status === 401) {
+      clearAuthToken()
+      localStorage.removeItem('ls_user')
+    }
+
+    const error = new Error(
+      body.error ||
+      body.message ||
+      `Request failed: ${response.status}`
+    )
+    error.status = response.status
+    throw error
+  }
+
+  return body
+}
+
+
+/* =========================
+   AUTH
+========================= */
+
+export async function register(payload) {
+  const data = await request('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
+  const token = data.token || data.access_token
+
+  if (token) {
+    setAuthToken(token)
+  }
+  if (data.user) localStorage.setItem('ls_user', JSON.stringify(data.user))
+
+  return data
+}
+
+
+export async function login(payload) {
+  const data = await request('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
+  const token = data.token || data.access_token
+
+  if (token) {
+    setAuthToken(token)
+  }
+  if (data.user) localStorage.setItem('ls_user', JSON.stringify(data.user))
+
+  return data
+}
+
+export async function deleteAccount(confirmation) {
+  return request('/auth/account', {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation }),
+  })
+}
+
+export async function updateProfile(payload) {
+  return request('/auth/profile', { method: 'PATCH', body: JSON.stringify(payload) })
+}
+
+export async function getProfile() { return request('/auth/profile') }
+
+
+/* =========================
+   COMMAND CENTER
+========================= */
+
+export async function getCommandCenterSummary() {
+  return request('/command-center/summary')
+}
+
+
+/* =========================
+   SHIPMENTS
+========================= */
+
+export async function listShipments() {
+  return request('/shipments')
+}
+
+
+export async function createShipment(payload) {
+  return request('/shipments', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+
+export async function evaluateShipment(shipmentId) {
+  return request(`/shipments/${shipmentId}/evaluate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+
+/* =========================
+   RECOMMENDATIONS
+========================= */
+
+export async function approveRecommendation(
+  recommendationId,
+  notes = ''
+) {
+  return request(
+    `/recommendations/${recommendationId}/approve`,
+    {
       method: 'POST',
-      body: JSON.stringify({ organization_id: DEMO_ORG_ID, ...payload }),
-    })
-  },
-  evaluateShipment(shipmentId, orgId = DEMO_ORG_ID) {
-    return request(`/shipments/${shipmentId}/evaluate`, {
+      body: JSON.stringify({ notes }),
+    }
+  )
+}
+
+
+export async function rejectRecommendation(
+  recommendationId,
+  notes = ''
+) {
+  return request(
+    `/recommendations/${recommendationId}/reject`,
+    {
       method: 'POST',
-      body: JSON.stringify({ organization_id: orgId }),
-    })
-  },
-  approveRecommendation(recommendationId, orgId = DEMO_ORG_ID, reviewedBy = DEMO_USER_ID, notes = '') {
-    return request(`/recommendations/${recommendationId}/approve`, {
-      method: 'POST',
-      body: JSON.stringify({ organization_id: orgId, reviewed_by: reviewedBy, notes }),
-    })
-  },
-  rejectRecommendation(recommendationId, orgId = DEMO_ORG_ID, reviewedBy = DEMO_USER_ID, notes = '') {
-    return request(`/recommendations/${recommendationId}/reject`, {
-      method: 'POST',
-      body: JSON.stringify({ organization_id: orgId, reviewed_by: reviewedBy, notes }),
-    })
-  },
-  approveCommunicationAndExecute(workflowId, communicationId, orgId = DEMO_ORG_ID, approvedBy = DEMO_USER_ID) {
-    return request(`/workflows/${workflowId}/approve-communication`, {
+      body: JSON.stringify({ notes }),
+    }
+  )
+}
+
+
+/* =========================
+   WORKFLOWS
+========================= */
+
+export async function approveCommunicationAndExecute(
+  workflowId,
+  communicationId
+) {
+  return request(
+    `/workflows/${workflowId}/approve-communication`,
+    {
       method: 'POST',
       body: JSON.stringify({
-        organization_id: orgId,
         communication_id: communicationId,
-        approved_by: approvedBy,
       }),
-    })
-  },
+    }
+  )
+}
+
+/* =========================
+   OPERATIONS CONTROL PLANE
+========================= */
+export async function getOperationsOverview() { return request('/operations/overview') }
+export async function createOrder(payload) { return request('/operations/orders', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function upsertInventory(payload) { return request('/operations/inventory', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function createReturn(payload) { return request('/operations/returns', { method: 'POST', body: JSON.stringify(payload) }) }
+
+export async function listShipmentNotifications(shipmentId) { return request(`/notifications/shipment/${shipmentId}`) }
+export async function sendNotification(payload) { return request('/notifications/send', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function createCarrierAssignment(payload) { return request('/integrations/carrier-assignments', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function dispatchCarrierAssignment(id) { return request(`/integrations/carrier-assignments/${id}/dispatch`, { method: 'POST', body: JSON.stringify({ confirm: true }) }) }
+export async function syncIntegrationRecords(payload) { return request('/integrations/sync', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function listIntegrationConnections() { return request('/integrations/connections') }
+export async function saveIntegrationConnection(payload) { return request('/integrations/connections', { method: 'POST', body: JSON.stringify(payload) }) }
+
+
+/* =========================
+   API OBJECT
+========================= */
+
+export const api = {
+  register,
+  login,
+  deleteAccount,
+  updateProfile,
+  getProfile,
+  logout,
+
+  getCommandCenterSummary,
+
+  listShipments,
+  createShipment,
+  evaluateShipment,
+
+  approveRecommendation,
+  rejectRecommendation,
+
+  approveCommunicationAndExecute,
+  getOperationsOverview,
+  createOrder,
+  upsertInventory,
+  createReturn,
+  listShipmentNotifications,
+  sendNotification,
+  createCarrierAssignment,
+  dispatchCarrierAssignment,
+  syncIntegrationRecords,
+  listIntegrationConnections,
+  saveIntegrationConnection,
 }

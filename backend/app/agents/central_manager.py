@@ -5,14 +5,21 @@ Central AI Logistics Manager — SRS §6.2, §10.2.
 relevant operational context, generate or coordinate recommendations, route
 actions to human approval when required, and coordinate approved workflows."
 
-This module implements the Shipment Delay Workflow end to end (steps 1-7 of
-SRS §10.2 run automatically; steps 8-11 happen once a human approves —
-see workflows blueprint / execute_approved_workflow below).
+This module autonomously completes routine shipment-delay work. A human is
+only asked to approve a critical risk or a monetary commitment.
 """
+from datetime import datetime, timezone
+import logging
+
 from ..services.supabase_client import get_client
 from .transportation_agent import TransportationAgent
 from .risk_agent import RiskAgent
 from .communication_agent import CommunicationAgent
+from ..autonomy.policy_engine import PolicyEngine
+from ..autonomy.execution_engine import ExecutionEngine
+from ..services.notification_service import deliver
+
+log = logging.getLogger(__name__)
 
 
 class CentralAILogisticsManager:
@@ -22,6 +29,8 @@ class CentralAILogisticsManager:
         self.transportation_agent = TransportationAgent()
         self.risk_agent = RiskAgent()
         self.communication_agent = CommunicationAgent()
+        self.policy = PolicyEngine()
+        # execution engine will be instantiated per request with the DB client
 
     def evaluate_shipment(self, organization_id: str, shipment_id: str) -> dict:
         """
@@ -31,11 +40,11 @@ class CentralAILogisticsManager:
           4. Central AI Logistics Manager prioritizes the issue.
           5. System displays the shipment as at risk (risk_agent writes this).
           6. AI prepares an explanation and recommended next actions.
-          7. (Authorized user reviews the recommendation — happens in the UI.)
+          7. Routine actions complete autonomously; exceptional actions wait
+             for a human approval.
 
         Returns a dict the API can hand straight to the frontend; also
-        persists a risk alert (if applicable) and a recommendation to
-        ai_recommendations for the human-approval step.
+        persists a risk alert and an auditable workflow outcome.
         """
         db = get_client()
         shipment = (
@@ -77,12 +86,101 @@ class CentralAILogisticsManager:
             organization_id, shipment, transport_output, risk_output
         )
 
+        action = self._action_for_severity(severity, shipment_id)
+        policy_result = self.policy.evaluate(organization_id, action)
+        action_result = None
+        if policy_result["requires_approval"]:
+            self._write_audit_safely(db, {
+                    "organization_id": organization_id,
+                    "actor_type": "agent",
+                    "actor_id": self.name,
+                    "event_type": "human_approval_required",
+                    "entity_type": "shipment",
+                    "entity_id": shipment_id,
+                    "detail": {"action": action, "policy": policy_result},
+            })
+            # This is an audit/status entry only: no customer message is sent
+            # until a dispatcher has approved the critical or monetary action.
+            try:
+                db.table("notification_log").insert(
+                    {
+                        "organization_id": organization_id,
+                        "shipment_id": shipment_id,
+                        "channel": shipment.get("preferred_contact_channel", "email"),
+                        "recipient": shipment.get("customer_contact"),
+                        "content": "Customer update is pending dispatcher approval.",
+                        "status": "pending_approval",
+                        "triggered_by": "system",
+                    }
+                ).execute()
+            except Exception:
+                # Deployments which have not yet applied the notification
+                # migration must still be able to evaluate critical cases.
+                pass
+        else:
+            action_result = self._complete_autonomous_workflow(
+                organization_id, shipment, recommendation, action
+            )
+
         return {
             "shipment": shipment,
             "transport_observation": transport_output.to_dict(),
             "risk": risk_output.to_dict(),
             "recommendation": recommendation,
+            "autonomous_action_result": action_result,
+            "policy": policy_result,
         }
+
+    def _action_for_severity(self, severity, shipment_id):
+        actions = {
+            "low": "MONITOR_SHIPMENT",
+            "medium": "SEND_CUSTOMER_UPDATE",
+            "high": "ESCALATE_CARRIER",
+            # Rerouting / expediting can create a carrier charge.
+            "critical": "BOOK_CARRIER",
+        }
+        return {"action": actions[severity], "shipment_id": shipment_id, "risk_severity": severity}
+
+    def _complete_autonomous_workflow(self, organization_id, shipment, recommendation, action):
+        """Execute and persist a routine, non-financial logistics workflow."""
+        db = get_client()
+        now = datetime.now(timezone.utc).isoformat()
+        execution = ExecutionEngine(db).execute(organization_id, action)
+        steps = [{"step": "autonomous_action_executed", "detail": execution, "at": now}]
+
+        communication_id = None
+        if action["action"] in {"SEND_CUSTOMER_UPDATE", "ESCALATE_CARRIER"}:
+            communication = self.communication_agent.run(
+                organization_id=organization_id, entity_type="shipment", entity_id=shipment["id"],
+                shipment=shipment, recommendation=recommendation,
+            )
+            communication_id = communication.data.get("communication_id")
+            if communication_id:
+                try:
+                    communication_row = db.table("communications").select("subject, body").eq("id", communication_id).eq("organization_id", organization_id).single().execute().data
+                    delivery = deliver(
+                        organization_id, shipment["id"], shipment.get("preferred_contact_channel", "email"),
+                        shipment.get("customer_contact"), communication_row.get("body", ""), subject=communication_row.get("subject"),
+                        communication_id=communication_id, triggered_by="system",
+                    )
+                except Exception as exc:
+                    delivery = {"success": False, "error": f"Notification delivery could not start: {exc}"}
+                if delivery["success"]:
+                    db.table("communications").update({"status": "sent"}).eq("id", communication_id).eq("organization_id", organization_id).execute()
+                steps.append({"step": "notification_delivery", "communication_id": communication_id, "status": "sent" if delivery["success"] else "failed", "at": now})
+
+        db.table("ai_recommendations").update({"status": "approved"}).eq("id", recommendation["id"]).eq("organization_id", organization_id).execute()
+        workflow = db.table("workflows").insert({
+            "organization_id": organization_id, "workflow_type": "shipment_delay", "entity_type": "shipment",
+            "entity_id": shipment["id"], "recommendation_id": recommendation["id"], "status": "completed",
+            "steps_log": steps, "started_at": now, "completed_at": now,
+        }).execute()
+        self._write_audit_safely(db, {
+            "organization_id": organization_id, "actor_type": "agent", "actor_id": self.name,
+            "event_type": "autonomous_workflow_completed", "entity_type": "shipment", "entity_id": shipment["id"],
+            "detail": {"action": action, "communication_id": communication_id},
+        })
+        return {"status": "completed", "workflow_id": workflow.data[0]["id"] if workflow.data else None, "communication_id": communication_id}
 
     def _build_recommendation(self, organization_id, shipment, transport_output, risk_output):
         """SRS §10.2 step 6 + §14.2 explainability: separate facts from
@@ -124,8 +222,7 @@ class CentralAILogisticsManager:
             }
         ).execute()
 
-        db.table("audit_events").insert(
-            {
+        self._write_audit_safely(db, {
                 "organization_id": organization_id,
                 "actor_type": "agent",
                 "actor_id": self.name,
@@ -133,7 +230,15 @@ class CentralAILogisticsManager:
                 "entity_type": "shipment",
                 "entity_id": shipment["id"],
                 "detail": {"recommendation_id": rec.data[0]["id"]},
-            }
-        ).execute()
+        })
 
         return rec.data[0] if rec.data else None
+
+    @staticmethod
+    def _write_audit_safely(db, event):
+        """Audit is important, but a schema/RLS mismatch must not turn a
+        safe decision into a 500 for the dispatcher."""
+        try:
+            db.table("audit_events").insert(event).execute()
+        except Exception:
+            log.exception("Unable to write audit event %s", event.get("event_type"))

@@ -13,10 +13,12 @@ SRS §7.1 Agent Coordination requirements this enforces:
 """
 from __future__ import annotations
 from datetime import datetime, timezone
+import logging
 from typing import Any, Literal
 from ..services.supabase_client import get_client
 
 OutputKind = Literal["observation", "prediction", "recommendation", "action"]
+log = logging.getLogger(__name__)
 
 
 class AgentOutput:
@@ -47,6 +49,10 @@ class AgentOutput:
 
 class BaseAgent:
     name: str = "base_agent"
+    # descriptive objective and capabilities for autonomous orchestration
+    objective: str = "Perform a logistics-related task within configured authority."
+    tools: list[str] = []
+    permissions: list[str] = []
 
     def _log_run(
         self,
@@ -84,17 +90,33 @@ class BaseAgent:
         entity_id = kwargs.get("entity_id", "unknown")
         try:
             output = self._execute(organization_id=organization_id, **kwargs)
-            self._log_run(
-                organization_id, entity_type, entity_id, kwargs, output,
-                status="success", started_at=started_at,
-            )
+            try:
+                self._log_run(
+                    organization_id, entity_type, entity_id, kwargs, output,
+                    status="success", started_at=started_at,
+                )
+            except Exception:
+                # Observability must never prevent a safe logistics workflow
+                # from completing. The error remains visible in server logs
+                # until the backend service-role/RLS configuration is fixed.
+                log.exception("Unable to write agent run for %s", self.name)
             return output
         except Exception as exc:
-            self._log_run(
-                organization_id, entity_type, entity_id, kwargs, None,
-                status="failed", error_message=str(exc), started_at=started_at,
-            )
+            try:
+                self._log_run(
+                    organization_id, entity_type, entity_id, kwargs, None,
+                    status="failed", error_message=str(exc), started_at=started_at,
+                )
+            except Exception:
+                log.exception("Unable to write failed agent run for %s", self.name)
             raise
 
     def _execute(self, organization_id: str, **kwargs) -> AgentOutput:
         raise NotImplementedError
+
+    def can(self, permission: str) -> bool:
+        """Check whether this agent declares a given permission."""
+        return permission in getattr(self, "permissions", [])
+
+    def describe(self) -> dict:
+        return {"name": self.name, "objective": getattr(self, "objective", ""), "tools": getattr(self, "tools", []), "permissions": getattr(self, "permissions", [])}

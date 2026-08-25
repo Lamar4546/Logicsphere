@@ -10,6 +10,8 @@
 create table organizations (
     id              uuid primary key default gen_random_uuid(),
     name            text not null,
+    industry        text,
+    country         text,
     logistics_profile jsonb default '{}',   -- freight modes, regions, default carriers, etc.
     created_at      timestamptz not null default now()
 );
@@ -22,8 +24,12 @@ create type user_role as enum (
 );
 
 create table app_users (
-    id              uuid primary key references auth.users(id) on delete cascade,
+    id              uuid primary key default gen_random_uuid(),
     organization_id uuid not null references organizations(id) on delete cascade,
+    email           text not null unique,
+    -- Password identity is owned by Supabase Auth; this legacy column remains
+    -- nullable only for compatibility with older installations.
+    password_hash   text,
     full_name       text not null,
     role            user_role not null default 'viewer',
     created_at      timestamptz not null default now()

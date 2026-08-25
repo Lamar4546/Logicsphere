@@ -7,6 +7,7 @@ this is the "system displays the shipment as at risk" step (§10.2 step 5).
 """
 from .base import BaseAgent, AgentOutput
 from ..services.supabase_client import get_client
+from ..services.minimax_client import MiniMaxError, chat_json, is_configured
 
 # Thresholds are a starting configuration, not a hardcoded business rule —
 # SRS §5.3 calls for these to be "configurable according to customer policies"
@@ -37,6 +38,7 @@ class RiskAgent(BaseAgent):
                 data={"severity": None, "delay_hours": delay_hours},
             )
 
+        ai_reasoning = self._reason_about_delay(shipment, delay_hours, severity)
         db = get_client()
         alert = db.table("risk_alerts").insert(
             {
@@ -69,6 +71,8 @@ class RiskAgent(BaseAgent):
                 "severity": severity,
                 "delay_hours": delay_hours,
                 "risk_alert_id": alert.data[0]["id"] if alert.data else None,
+                "ai_reasoning": ai_reasoning,
+                "ai_provider": "minimax" if ai_reasoning else "deterministic_fallback",
             },
             confidence=self._confidence_for(severity),
         )
@@ -90,3 +94,37 @@ class RiskAgent(BaseAgent):
         # Simple heuristic for the thin slice — larger, clearer delays get
         # higher confidence. Replace with a calibrated model later.
         return {"low": 0.6, "medium": 0.75, "high": 0.85, "critical": 0.95}[severity]
+
+    def _reason_about_delay(self, shipment, delay_hours, severity):
+        """Ask MiniMax for operational context, never for the safety decision.
+
+        Deterministic thresholds remain the authority for risk severity so a
+        model response cannot reduce a safety gate or create a financial action.
+        """
+        if not is_configured():
+            return None
+        try:
+            result = chat_json(
+                [
+                    {
+                        "role": "system",
+                        "content": "You are a logistics risk analyst. Return concise JSON with keys operational_reasoning and customer_impact. Do not recommend purchases, bookings, or financial commitments.",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Shipment {shipment.get('reference_number')} is {delay_hours} hours late, "
+                            f"from {shipment.get('origin')} to {shipment.get('destination')}. "
+                            f"Deterministic severity is {severity}. Last event: {shipment.get('last_event_description') or 'not available'}."
+                        ),
+                    },
+                ]
+            )
+            return {
+                "operational_reasoning": str(result.get("operational_reasoning", ""))[:1000],
+                "customer_impact": str(result.get("customer_impact", ""))[:600],
+            }
+        except MiniMaxError:
+            # The workflow remains available with deterministic reasoning if
+            # the model is unavailable or returns invalid JSON.
+            return None

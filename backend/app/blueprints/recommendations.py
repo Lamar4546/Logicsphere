@@ -1,21 +1,19 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, g, request, jsonify
 from ..services import workflow_service
+from ..services.jwt import login_required
 
 recommendations_bp = Blueprint("recommendations", __name__)
 
 
 @recommendations_bp.post("/<recommendation_id>/approve")
+@login_required
 def approve(recommendation_id):
-    """SRS §10.2 step 7 (user approves) -> triggers step 8 (draft communication)."""
     payload = request.get_json(force=True) or {}
-    organization_id = payload.get("organization_id")
-    reviewed_by = payload.get("reviewed_by")
-    if not organization_id or not reviewed_by:
-        return jsonify({"error": "organization_id and reviewed_by are required"}), 400
+    reviewed_by = g.current_user["sub"]
 
     try:
         result = workflow_service.approve_recommendation(
-            organization_id, recommendation_id, reviewed_by, payload.get("notes")
+            g.current_user["org"], recommendation_id, reviewed_by, payload.get("notes")
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 404
@@ -24,14 +22,12 @@ def approve(recommendation_id):
 
 
 @recommendations_bp.post("/<recommendation_id>/reject")
+@login_required
 def reject(recommendation_id):
     payload = request.get_json(force=True) or {}
-    organization_id = payload.get("organization_id")
-    reviewed_by = payload.get("reviewed_by")
-    if not organization_id or not reviewed_by:
-        return jsonify({"error": "organization_id and reviewed_by are required"}), 400
+    reviewed_by = g.current_user["sub"]
 
     workflow_service.reject_recommendation(
-        organization_id, recommendation_id, reviewed_by, payload.get("notes")
+        g.current_user["org"], recommendation_id, reviewed_by, payload.get("notes")
     )
     return jsonify({"status": "rejected"})

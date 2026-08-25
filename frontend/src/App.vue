@@ -1,101 +1,51 @@
 <script setup>
+import { computed, onMounted, ref } from 'vue'
 import CommandCenter from './views/CommandCenter.vue'
+import OperationsConsole from './views/OperationsConsole.vue'
+import SettingsView from './views/SettingsView.vue'
+import AuthPanel from './components/AuthPanel.vue'
+import AppTutorial from './components/AppTutorial.vue'
+import { api, getAuthToken, logout } from './services/api.js'
+import logoUrl from './assets/logisphere-logo.png'
+
+const isAuthenticated = ref(!!getAuthToken())
+const activeWorkspace = ref('shipments')
+const operationsTab = ref('orders')
+const sidebarOpen = ref(true)
+const profileMenuOpen = ref(false)
+const currentUser = ref(JSON.parse(localStorage.getItem('ls_user') || 'null'))
+const theme = ref(localStorage.getItem('ls_theme') || 'sky')
+const showTutorial = ref(!!getAuthToken() && !localStorage.getItem('ls_tutorial_complete'))
+const pageTitle = computed(() => ({ shipments: 'Control Tower', operations: 'Operations Center', settings: 'Settings' }[activeWorkspace.value]))
+function handleAuthenticated() { currentUser.value = JSON.parse(localStorage.getItem('ls_user') || 'null'); isAuthenticated.value = true; showTutorial.value = !localStorage.getItem('ls_tutorial_complete') }
+function handleLogout() { logout(); profileMenuOpen.value = false; isAuthenticated.value = false }
+function setWorkspace(workspace, tab) { activeWorkspace.value = workspace; profileMenuOpen.value = false; if (tab) operationsTab.value = tab }
+function openSettings() { setWorkspace('settings') }
+function navigateTutorial(target) { activeWorkspace.value = target === 'Operations' ? 'operations' : 'shipments' }
+function setTheme(nextTheme) { theme.value = nextTheme; localStorage.setItem('ls_theme', nextTheme) }
+function handleAccountDeleted() { logout(); isAuthenticated.value = false; activeWorkspace.value = 'shipments' }
+function handleProfileUpdated(user) { currentUser.value = user; localStorage.setItem('ls_user', JSON.stringify(user)); profileMenuOpen.value = false }
+async function hydrateProfile() { if (!isAuthenticated.value) return; try { handleProfileUpdated((await api.getProfile()).user) } catch { /* expired sessions are handled by the next protected request */ } }
+onMounted(hydrateProfile)
 </script>
 
 <template>
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark">LS</span>
-        <div>
-          <h1 class="display">LogiSphere AI</h1>
-          <span class="dim eyebrow">Command Center — Shipment Delay Workflow</span>
-        </div>
-      </div>
-      <div class="status-chip">
-        <span class="pulse"></span> Central AI Logistics Manager · Online
-      </div>
-    </header>
-    <main>
-      <CommandCenter />
-    </main>
+  <div class="app-shell" :class="{ 'sidebar-closed': !sidebarOpen, 'auth-shell': !isAuthenticated }" :data-theme="theme">
+    <template v-if="isAuthenticated">
+      <aside class="sidebar" aria-label="Main navigation">
+        <div class="sidebar-top"><div class="brand"><img :src="logoUrl" alt="LogiSphere AI" class="app-logo" /><span class="brand-name">LogiSphere</span></div><button class="collapse" :aria-label="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'" @click="sidebarOpen = !sidebarOpen">‹</button></div>
+        <nav class="nav-group"><span class="nav-label">WORKSPACE</span><button :class="{ active: activeWorkspace === 'shipments' }" @click="setWorkspace('shipments')"><i>⌁</i><span>Control Tower</span></button><button :class="{ active: activeWorkspace === 'shipments' }" @click="setWorkspace('shipments')"><i>◉</i><span>Track Shipments</span></button><button :class="{ active: activeWorkspace === 'operations' }" @click="setWorkspace('operations', 'orders')"><i>✦</i><span>AI Operations</span></button></nav>
+        <nav class="nav-group secondary"><span class="nav-label">OPERATIONS</span><button :class="{active:activeWorkspace==='operations' && operationsTab==='orders'}" @click="setWorkspace('operations', 'orders')"><i>▦</i><span>Orders & Dispatch</span></button><button :class="{active:activeWorkspace==='operations' && operationsTab==='inventory'}" @click="setWorkspace('operations', 'inventory')"><i>□</i><span>Inventory</span></button><button :class="{active:activeWorkspace==='operations' && operationsTab==='delivery'}" @click="setWorkspace('operations', 'delivery')"><i>↗</i><span>Delivery & ePOD</span></button><button :class="{active:activeWorkspace==='operations' && operationsTab==='analytics'}" @click="setWorkspace('operations', 'analytics')"><i>⌇</i><span>Analytics</span></button><button :class="{active:activeWorkspace==='operations' && operationsTab==='returns'}" @click="setWorkspace('operations', 'returns')"><i>↶</i><span>Returns</span></button></nav>
+        <div class="sidebar-bottom"><div class="profile-wrap"><button type="button" class="profile" :aria-expanded="profileMenuOpen" @click="profileMenuOpen = !profileMenuOpen"><span class="avatar">{{ currentUser?.full_name?.slice(0, 2).toUpperCase() || 'AI' }}</span><span><strong>{{ currentUser?.full_name || 'Operations team' }}</strong><small>{{ currentUser?.role || 'AI control plane' }}</small></span><i>⌄</i></button><div v-if="profileMenuOpen" class="profile-menu"><button type="button" @click.stop="openSettings"><i>✎</i>Edit profile & settings</button><button type="button" @click="handleLogout"><i>↪</i>Sign out</button></div></div><button type="button" @click="showTutorial = true"><i>?</i><span>App tutorial</span></button></div>
+      </aside>
+      <section class="workspace"><header class="topbar"><div><span class="breadcrumb">LogiSphere / {{ pageTitle }}</span><h1>{{ pageTitle }}</h1></div><div class="top-actions"><div class="agent-status"><b></b><span>AI agents online</span></div><button class="help" @click="showTutorial = true">How it works</button></div></header><main class="content"><CommandCenter v-if="activeWorkspace === 'shipments'" /><OperationsConsole v-else-if="activeWorkspace === 'operations'" :initial-tab="operationsTab" /><SettingsView v-else :theme="theme" :user="currentUser" @update-theme="setTheme" @profile-updated="handleProfileUpdated" @account-deleted="handleAccountDeleted" /></main></section>
+      <button v-if="!sidebarOpen" class="open-sidebar" aria-label="Open sidebar" @click="sidebarOpen = true">›</button>
+      <AppTutorial :open="showTutorial" @close="showTutorial = false" @navigate="navigateTutorial" />
+    </template>
+    <main v-else class="auth-layout"><AuthPanel @authenticated="handleAuthenticated" /></main>
   </div>
 </template>
 
 <style scoped>
-.shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1.1rem 2rem;
-  border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel) 0%, var(--ink) 100%);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-}
-
-.brand-mark {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 0.8rem;
-  color: #1A1200;
-  background: var(--signal);
-  border-radius: 6px;
-  padding: 0.4rem 0.55rem;
-  letter-spacing: 0.04em;
-}
-
-h1 {
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.status-chip {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--text-dim);
-}
-
-.pulse {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--risk-low);
-  box-shadow: 0 0 0 rgba(78, 159, 110, 0.6);
-  animation: pulse 2.2s infinite;
-}
-
-@keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(78, 159, 110, 0.55); }
-  70%  { box-shadow: 0 0 0 8px rgba(78, 159, 110, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(78, 159, 110, 0); }
-}
-
-main {
-  flex: 1;
-  padding: 1.75rem 2rem 3rem;
-  max-width: 1180px;
-  width: 100%;
-  margin: 0 auto;
-}
+.app-shell{min-height:100dvh;display:grid;grid-template-columns:252px minmax(0,1fr);background:var(--ink);transition:grid-template-columns .2s ease}.app-shell.auth-shell{display:block}.app-shell.sidebar-closed{grid-template-columns:0 minmax(0,1fr)}.sidebar{position:sticky;top:0;height:100dvh;display:flex;flex-direction:column;gap:.5rem;overflow-y:auto;overflow-x:hidden;padding:.75rem .85rem;background:linear-gradient(180deg,var(--panel),var(--panel-2));border-right:1px solid var(--line);white-space:nowrap}.sidebar-closed .sidebar{opacity:0;pointer-events:none;padding-left:0;padding-right:0}.sidebar-top{display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.15rem .4rem .45rem}.brand{display:flex;align-items:center;gap:.65rem;color:var(--text);font-weight:700}.app-logo{width:2rem;height:2rem;border-radius:9px;object-fit:cover;object-position:center;background:#fff}.collapse{width:1.65rem;height:1.65rem;padding:0;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text-dim);font-size:1.3rem}.nav-group{display:flex;flex-direction:column;gap:.1rem}.nav-label{margin:.35rem .5rem .13rem;color:var(--text-dim);font:.62rem var(--font-mono);letter-spacing:.09em}.nav-group button,.sidebar-bottom button{display:flex;align-items:center;gap:.7rem;width:100%;border:0;background:transparent;color:var(--text-dim);text-align:left;padding:.48rem .7rem;border-radius:8px}.nav-group button:hover,.sidebar-bottom button:hover{background:var(--panel-2);border:0}.nav-group button.active{background:color-mix(in srgb,var(--signal) 17%,transparent);color:var(--signal);font-weight:650}.nav-group i,.sidebar-bottom i{display:grid;place-items:center;width:1rem;font-style:normal;font-size:.95rem}.secondary{border-top:1px solid var(--line);padding-top:.25rem}.sidebar-bottom{position:sticky;bottom:0;margin-top:auto;display:flex;flex-direction:column;gap:.1rem;padding-top:.35rem;background:linear-gradient(180deg,transparent,var(--panel-2) 18%);flex-shrink:0}.profile-wrap{position:relative;margin:0 .3rem;padding-top:.4rem;border-top:1px solid var(--line)}.profile{justify-content:flex-start;padding:.35rem!important;color:var(--text-dim)!important;font-size:.75rem!important}.profile>span:nth-child(2){flex:1}.profile strong{display:block}.profile small{display:block;margin-top:.12rem;color:var(--text-dim)}.profile-menu{position:absolute;z-index:30;bottom:calc(100% + .5rem);left:0;right:0;padding:.3rem;background:var(--panel);border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 28px rgba(20,48,76,.18)}.profile-menu button{padding:.5rem!important;color:var(--text)!important}.avatar{display:grid;place-items:center;width:1.8rem;height:1.8rem;border-radius:50%;background:var(--panel-2);color:var(--signal);font:.62rem var(--font-mono)}.workspace{min-width:0}.topbar{min-height:82px;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 2rem;background:var(--panel);border-bottom:1px solid var(--line)}.breadcrumb{display:block;color:var(--text-dim);font-size:.73rem;margin-bottom:.25rem}.topbar h1{color:var(--text);font-size:1.4rem}.top-actions{display:flex;align-items:center;gap:.75rem}.agent-status{display:flex;align-items:center;gap:.45rem;color:var(--text-dim);font-size:.75rem}.agent-status b{width:.48rem;height:.48rem;border-radius:50%;background:#31a274;box-shadow:0 0 0 4px #e3f6ee}.help{border-color:var(--line);background:var(--panel);color:var(--signal)}.content{width:min(1440px,100%);padding:1.25rem 2rem 2rem;margin:0 auto}.open-sidebar{position:fixed;left:.8rem;top:1.15rem;z-index:4;display:grid;place-items:center;width:2rem;height:2rem;padding:0;border-radius:8px;background:var(--panel);color:var(--signal);border-color:var(--line);font-size:1.5rem}.auth-layout{min-height:100dvh;display:grid;place-items:center;padding:1.25rem;background:radial-gradient(circle at top left,#dceeff,transparent 40%),#f4f8fc}@media(max-width:800px){.app-shell,.app-shell.sidebar-closed{grid-template-columns:0 1fr}.app-shell.auth-shell{display:block}.sidebar{position:fixed;z-index:20;width:252px;box-shadow:12px 0 30px rgba(31,61,92,.15)}.app-shell:not(.sidebar-closed) .sidebar{opacity:1;pointer-events:auto}.topbar{padding:1rem 1.25rem 1rem 3.5rem}.content{padding:1.25rem}.top-actions .agent-status{display:none}.auth-layout{padding:0}}
 </style>
