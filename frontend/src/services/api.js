@@ -199,6 +199,25 @@ export async function approveCommunicationAndExecute(
     }
   )
 }
+export async function importOrdersCsv(file) {
+  const token = getAuthToken()
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const response = await fetch(`${BASE}/operations/orders/import`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  })
+
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const error = new Error(body.error || `Import failed: ${response.status}`)
+    error.status = response.status
+    throw error
+  }
+  return body
+}
 
 /* =========================
    OPERATIONS CONTROL PLANE

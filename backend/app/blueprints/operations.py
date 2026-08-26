@@ -1,3 +1,7 @@
+import csv
+import io
+import logging
+
 from flask import Blueprint, g, jsonify, request
 
 from ..agents.operations_agent import OperationsAgent
@@ -6,6 +10,7 @@ from ..services.supabase_client import get_client
 
 operations_bp = Blueprint("operations", __name__)
 operations_agent = OperationsAgent()
+log = logging.getLogger(__name__)
 
 
 @operations_bp.get("/overview")
@@ -20,8 +25,6 @@ def overview():
             "returns": db.table("returns").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data,
             "carrier_assignments": [], "financial_records": [],
         }
-        # Migration 007 adds integration data. Keep core operations usable
-        # until it has been run, instead of making the whole page unavailable.
         try:
             overview["carrier_assignments"] = db.table("carrier_assignments").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data
             overview["financial_records"] = db.table("financial_records").select("*").eq("organization_id", org).order("recorded_at", desc=True).limit(20).execute().data
@@ -34,18 +37,109 @@ def overview():
         return jsonify({"error": f"Operations tables unavailable. Apply migration 005_operations_control_plane.sql. Detail: {exc}"}), 503
 
 
+def _create_order_and_shipment(db, org, data):
+    """Shared by manual order creation and CSV import. Creates the order,
+    then the linked shipment row so Control Tower sees it immediately.
+    Returns (created_dict, error_message)."""
+    reference_number = (data.get("reference_number") or "").strip()
+    if not reference_number:
+        return None, "reference_number is required"
+
+    order = db.table("orders").insert({
+        "organization_id": org,
+        "reference_number": reference_number,
+        "customer_name": (data.get("customer_name") or "").strip() or None,
+        "origin": (data.get("origin") or "").strip() or None,
+        "destination": (data.get("destination") or "").strip() or None,
+        "priority": (data.get("priority") or "standard").strip().lower(),
+    }).execute().data[0]
+
+    shipment = db.table("shipments").insert({
+        "organization_id": org,
+        "order_id": order["id"],
+        "reference_number": order["reference_number"],
+        "origin": order.get("origin"),
+        "destination": order.get("destination"),
+        "status": "planned",
+    }).execute().data[0]
+
+    return {"order": order, "shipment": shipment}, None
+
+
 @operations_bp.post("/orders")
 @login_required
 def create_order():
     payload, org = request.get_json(force=True) or {}, g.current_user["org"]
-    if not payload.get("reference_number"):
-        return jsonify({"error": "reference_number is required"}), 400
-    order = get_client().table("orders").insert({
-        "organization_id": org, "reference_number": payload["reference_number"], "customer_name": payload.get("customer_name"),
-        "origin": payload.get("origin"), "destination": payload.get("destination"), "priority": payload.get("priority", "standard"),
-    }).execute().data[0]
-    result = operations_agent.run(org, entity_type="order", entity_id=order["id"], operation="dispatch_order", entity=order)
-    return jsonify({"order": order, "agent_result": result.to_dict()}), 201
+    db = get_client()
+
+    created, error = _create_order_and_shipment(db, org, payload)
+    if error:
+        return jsonify({"error": error}), 400
+
+    result = operations_agent.run(
+        org, entity_type="order", entity_id=created["order"]["id"],
+        operation="dispatch_order", entity=created["order"],
+    )
+    return jsonify({
+        "order": created["order"],
+        "shipment": created["shipment"],
+        "agent_result": result.to_dict(),
+    }), 201
+
+
+@operations_bp.post("/orders/import")
+@login_required
+def import_orders_csv():
+    """Bulk-create orders (and their linked shipments) from an uploaded CSV.
+    Expected columns (case-insensitive, extras ignored):
+    reference_number, customer_name, origin, destination, priority
+    """
+    org = g.current_user["org"]
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded. Send multipart/form-data with a 'file' field."}), 400
+
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".csv"):
+        return jsonify({"error": "File must be a .csv"}), 400
+
+    try:
+        stream = io.StringIO(file.stream.read().decode("utf-8-sig"))
+        reader = csv.DictReader(stream)
+    except Exception as e:
+        return jsonify({"error": f"Could not parse CSV: {e}"}), 400
+
+    if not reader.fieldnames:
+        return jsonify({"error": "CSV has no header row."}), 400
+
+    db = get_client()
+    created_references, errors = [], []
+
+    for row_num, raw_row in enumerate(reader, start=2):  # row 1 is the header
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw_row.items()}
+        created, error = _create_order_and_shipment(db, org, row)
+        if error:
+            errors.append({"row": row_num, "error": error})
+            continue
+
+        try:
+            operations_agent.run(
+                org, entity_type="order", entity_id=created["order"]["id"],
+                operation="dispatch_order", entity=created["order"],
+            )
+        except Exception:
+            log.exception("Agent dispatch failed for imported order (row %s)", row_num)
+            errors.append({"row": row_num, "error": "Order created, but agent dispatch failed. Check logs."})
+
+        created_references.append(created["order"]["reference_number"])
+
+    status = 201 if created_references else 400
+    return jsonify({
+        "imported": len(created_references),
+        "failed": len(errors),
+        "created_references": created_references,
+        "errors": errors,
+    }), status
 
 
 @operations_bp.post("/inventory")
