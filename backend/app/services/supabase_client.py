@@ -32,16 +32,19 @@ def init_supabase(app):
         key = key.strip().strip('"')
 
     # Basic sanity-check: the SERVICE_KEY should be a supabase service-role JWT.
+    # Decode failure and role mismatch are handled separately so a wrong-role
+    # key actually stops startup instead of being silently swallowed by a
+    # catch-all except.
     try:
         # Decode without verifying signature to inspect claims
         payload = _jwt.decode(key, options={"verify_signature": False})
+    except Exception as e:
+        log.warning("Could not decode SUPABASE_SERVICE_KEY to inspect role: %s", e)
+    else:
         role = payload.get("role")
         if role != "service_role":
             log.error("SUPABASE_SERVICE_KEY does not appear to be a service-role key (role=%s)", role)
             raise RuntimeError("SUPABASE_SERVICE_KEY must be the Supabase service_role key")
-    except Exception as e:
-        # If decoding fails, warn but continue — downstream calls will fail with permission errors.
-        log.warning("Could not decode SUPABASE_SERVICE_KEY to verify role: %s", e)
 
     _client = create_client(url, key)
 
