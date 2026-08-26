@@ -54,14 +54,23 @@ def _create_order_and_shipment(db, org, data):
         "priority": (data.get("priority") or "standard").strip().lower(),
     }).execute().data[0]
 
-    shipment = db.table("shipments").insert({
-        "organization_id": org,
-        "order_id": order["id"],
-        "reference_number": order["reference_number"],
-        "origin": order.get("origin"),
-        "destination": order.get("destination"),
-        "status": "planned",
-    }).execute().data[0]
+    try:
+        shipment = db.table("shipments").insert({
+            "organization_id": org,
+            "order_id": order["id"],
+            "reference_number": order["reference_number"],
+            "origin": order.get("origin"),
+            "destination": order.get("destination"),
+            "status": "planned",
+            "source_system": "order_dispatch",
+        }).execute().data[0]
+    except Exception as exc:
+        # Avoid leaving a hidden order behind if the linking migration has not
+        # been applied or the shipment insert is rejected.
+        db.table("orders").delete().eq("id", order["id"]).eq("organization_id", org).execute()
+        if "order_id" in str(exc):
+            return None, "Order-to-shipment linking needs migration 008_order_shipment_link.sql."
+        raise
 
     return {"order": order, "shipment": shipment}, None
 

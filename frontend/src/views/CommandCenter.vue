@@ -160,12 +160,12 @@ onBeforeUnmount(() => {
 })
 </script>
 <template>
-  <div>
+  <div class="control-shell">
     <div v-if="errorMessage" class="banner error">{{ errorMessage }}</div>
     <div v-if="loading" class="banner">Loading command center…</div>
 
     <template v-else>
-      <TodayStrip :today="summary.today" />
+      <TodayStrip :today="summary.today" :shipments="shipments" />
 
       <nav class="process-tabs" aria-label="Logistics workflow stages">
         <button :class="{ active: activeTab === 'tracking' }" @click="activeTab = 'tracking'">1. Tracking</button>
@@ -233,6 +233,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   font-size: 0.85rem;
 }
+.control-shell{--ink:#081422;--panel:#0d1d2e;--panel-2:#11263a;--line:#233c54;--text:#eaf4ff;--text-dim:#91a8bb;--signal:#3194ff;--risk-low:#43c999;--risk-medium:#f0b640;--risk-high:#ef8838;--risk-critical:#ff6674;min-height:calc(100dvh - 82px);margin:-1.25rem -2rem -2rem;padding:1.5rem 2rem 2rem;background:radial-gradient(circle at 78% 0%,#123c65 0,transparent 28%),#081422}
 .banner.error {
   border-color: var(--risk-critical);
   color: #FFB4B4;
@@ -240,7 +241,7 @@ onBeforeUnmount(() => {
 
 .process-tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.75rem; border-bottom: 1px solid var(--line); padding-bottom: 0.75rem; }
 .process-tabs button { background: transparent; border: 1px solid var(--line); color: var(--text-dim); padding: 0.5rem 0.75rem; border-radius: 6px; }
-.process-tabs button.active { background: var(--signal); border-color: var(--signal); color: #1A1200; }
+.process-tabs button.active { background: var(--signal); border-color: var(--signal); color: #fff; }
 .stage { margin-top: 1.25rem; max-width: 1180px; }
 .risk-card { padding: 1rem; margin-bottom: 0.75rem; }
 .risk-card p { margin: 0.65rem 0 0; }
@@ -264,4 +265,5 @@ onBeforeUnmount(() => {
   border-radius: 8px;
 }
 .section-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem}.refresh{padding:.38rem .62rem;font-size:.73rem}.new-shipment{margin-bottom:1rem}.new-shipment>summary{display:inline-flex;align-items:center;padding:.55rem .8rem;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--signal);cursor:pointer;font-size:.82rem;font-weight:600}.new-shipment[open]>summary{margin-bottom:.7rem}.tracking-layout{display:grid;grid-template-columns:minmax(280px,.75fr) minmax(380px,1.25fr);gap:1rem;align-items:start}.shipment-column{min-width:0}.empty-map{padding:1rem;color:var(--text-dim);min-height:300px}.sync-note{margin:.75rem 0;color:var(--text-dim);font:.67rem var(--font-mono)}@media(max-width:850px){.tracking-layout{grid-template-columns:1fr}.stage{max-width:780px}}
+@media(max-width:800px){.control-shell{margin:-1.25rem;padding:1.25rem}.stage{max-width:100%}}
 </style>

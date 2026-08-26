@@ -14,7 +14,7 @@ const operationsTab = ref('orders')
 const sidebarOpen = ref(true)
 const profileMenuOpen = ref(false)
 const currentUser = ref(JSON.parse(localStorage.getItem('ls_user') || 'null'))
-const theme = ref(localStorage.getItem('ls_theme') || 'sky')
+const theme = ref(localStorage.getItem('ls_theme') || 'midnight')
 const showTutorial = ref(!!getAuthToken() && !localStorage.getItem('ls_tutorial_complete'))
 const pageTitle = computed(() => ({ shipments: 'Control Tower', operations: 'Operations Center', settings: 'Settings' }[activeWorkspace.value]))
 function handleAuthenticated() { currentUser.value = JSON.parse(localStorage.getItem('ls_user') || 'null'); isAuthenticated.value = true; showTutorial.value = !localStorage.getItem('ls_tutorial_complete') }

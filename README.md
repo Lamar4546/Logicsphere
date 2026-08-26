@@ -99,6 +99,10 @@ imports, and integration audit logs. Configure the provider URL in the
 integration connections API and keep its API token in a matching backend
 environment variable (for example `CARRIER_API_TOKEN`), never in the browser.
 
+Run `supabase/migrations/008_order_shipment_link.sql` to link each in-app
+order to the shipment created by dispatch. After this, creating or importing
+an order makes it appear in the Control Tower immediately.
+
 Run `supabase/migrations/007_carrier_and_erp_wms_integrations.sql` to enable
 carrier assignments plus inbound WMS inventory and ERP financial-record sync.
 Configure each external connection in `integration_connections`; keep its

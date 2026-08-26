@@ -260,6 +260,7 @@ export const api = {
   approveCommunicationAndExecute,
   getOperationsOverview,
   createOrder,
+  importOrdersCsv,
   upsertInventory,
   createReturn,
   listShipmentNotifications,
