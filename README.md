@@ -103,6 +103,9 @@ Run `supabase/migrations/008_order_shipment_link.sql` to link each in-app
 order to the shipment created by dispatch. After this, creating or importing
 an order makes it appear in the Control Tower immediately.
 
+Run `supabase/migrations/009_backfill_order_shipments.sql` once after 008 to
+create and link shipments for orders that existed before the automation.
+
 Run `supabase/migrations/007_carrier_and_erp_wms_integrations.sql` to enable
 carrier assignments plus inbound WMS inventory and ERP financial-record sync.
 Configure each external connection in `integration_connections`; keep its

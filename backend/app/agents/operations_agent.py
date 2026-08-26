@@ -10,21 +10,21 @@ class OperationsAgent(BaseAgent):
 
     def _execute(self, organization_id: str, operation: str, entity: dict, **kwargs) -> AgentOutput:
         if operation == "dispatch_order":
-            return self._dispatch_order(organization_id, entity)
+            return self._dispatch_order(organization_id, entity, kwargs.get("shipment_id"))
         if operation == "inventory_review":
             return self._review_inventory(organization_id, entity)
         if operation == "process_return":
             return self._process_return(organization_id, entity)
         raise ValueError(f"Unsupported operation: {operation}")
 
-    def _dispatch_order(self, organization_id, order):
+    def _dispatch_order(self, organization_id, order, shipment_id=None):
         reasoning = self._reason("Dispatch this order safely and efficiently", order)
         route_plan = {
             "origin": order.get("origin"), "destination": order.get("destination"),
             "strategy": "nearest_available_driver", "reasoning": reasoning,
         }
         task = get_client().table("delivery_tasks").insert({
-            "organization_id": organization_id, "order_id": order["id"],
+            "organization_id": organization_id, "order_id": order["id"], "shipment_id": shipment_id,
             "assigned_driver": "Auto-assigned on carrier connection", "route_plan": route_plan,
             "status": "dispatched",
         }).execute().data[0]

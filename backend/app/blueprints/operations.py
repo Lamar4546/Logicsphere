@@ -87,7 +87,7 @@ def create_order():
 
     result = operations_agent.run(
         org, entity_type="order", entity_id=created["order"]["id"],
-        operation="dispatch_order", entity=created["order"],
+        operation="dispatch_order", entity=created["order"], shipment_id=created["shipment"]["id"],
     )
     return jsonify({
         "order": created["order"],
@@ -134,7 +134,7 @@ def import_orders_csv():
         try:
             operations_agent.run(
                 org, entity_type="order", entity_id=created["order"]["id"],
-                operation="dispatch_order", entity=created["order"],
+                operation="dispatch_order", entity=created["order"], shipment_id=created["shipment"]["id"],
             )
         except Exception:
             log.exception("Agent dispatch failed for imported order (row %s)", row_num)
