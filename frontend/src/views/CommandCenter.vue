@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, reactive } from 'vue'
+import { ref, onMounted, onBeforeUnmount, reactive, watch } from 'vue'
 import { api } from '../services/api.js'
 import TodayStrip from '../components/TodayStrip.vue'
 import ShipmentIntakeForm from '../components/ShipmentIntakeForm.vue'
@@ -8,6 +8,9 @@ import RecommendationCard from '../components/RecommendationCard.vue'
 import CommunicationCard from '../components/CommunicationCard.vue'
 import ProcessProgress from '../components/ProcessProgress.vue'
 import ShipmentMap from '../components/ShipmentMap.vue'
+import DeliveryInsights from '../components/DeliveryInsights.vue'
+
+const props = defineProps({ initialTab: { type: String, default: 'tracking' } })
 
 const loading = ref(true)
 const errorMessage = ref('')
@@ -23,7 +26,7 @@ const summary = reactive({
 // tracks workflow_id per recommendation once approved, so the communication
 // card knows which workflow to complete on final send.
 const workflowByRecommendation = ref({})
-const activeTab = ref('tracking')
+const activeTab = ref(props.initialTab)
 const selectedShipment = ref(null)
 const evaluatingId = ref(null)
 const process = ref(null)
@@ -38,6 +41,8 @@ const isMounted = ref(true)
 // prevents overlapping refreshAll() calls if a request takes longer than
 // the poll interval
 let refreshInFlight = false
+
+watch(() => props.initialTab, (tab) => { activeTab.value = tab })
 
 async function loadNotifications(shipmentId) {
   try {
@@ -166,6 +171,7 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <TodayStrip :today="summary.today" :shipments="shipments" />
+      <DeliveryInsights :shipments="shipments" />
 
       <nav class="process-tabs" aria-label="Logistics workflow stages">
         <button :class="{ active: activeTab === 'tracking' }" @click="activeTab = 'tracking'">1. Tracking</button>

@@ -113,6 +113,12 @@ export async function updateProfile(payload) {
 }
 
 export async function getProfile() { return request('/auth/profile') }
+export async function requestPasswordReset(email) {
+  return request('/auth/password/forgot', { method: 'POST', body: JSON.stringify({ email }) })
+}
+export async function resetPassword(payload) {
+  return request('/auth/password/reset', { method: 'POST', body: JSON.stringify(payload) })
+}
 
 
 /* =========================
@@ -246,6 +252,8 @@ export const api = {
   deleteAccount,
   updateProfile,
   getProfile,
+  requestPasswordReset,
+  resetPassword,
   logout,
 
   getCommandCenterSummary,

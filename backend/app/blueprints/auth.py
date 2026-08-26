@@ -1,4 +1,7 @@
 import logging
+import os
+
+import requests
 
 from flask import Blueprint, g, jsonify, request
 
@@ -8,6 +11,64 @@ from postgrest.exceptions import APIError
 
 auth_bp = Blueprint("auth", __name__)
 log = logging.getLogger(__name__)
+
+
+@auth_bp.post("/password/forgot")
+def request_password_reset():
+    """Ask Supabase to email a recovery link without exposing account existence."""
+    payload = request.get_json(force=True) or {}
+    email = str(payload.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "Email is required."}), 400
+
+    # This must be registered as an allowed redirect URL in Supabase Auth.
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    redirect_to = f"{frontend_url}/?auth=reset"
+    try:
+        get_client().auth.reset_password_email(email, {"redirect_to": redirect_to})
+    except Exception:
+        # Do not reveal whether an address belongs to an account. The server log
+        # retains the operational detail without placing it in a browser response.
+        log.exception("Unable to request password recovery email")
+
+    return jsonify({
+        "message": "If an account exists for that email, a password-reset link has been sent."
+    }), 200
+
+
+@auth_bp.post("/password/reset")
+def reset_password():
+    """Set a new password using the short-lived Supabase recovery access token."""
+    payload = request.get_json(force=True) or {}
+    recovery_token = str(payload.get("recovery_token") or "").strip()
+    password = str(payload.get("password") or "")
+    if not recovery_token or not password:
+        return jsonify({"error": "Recovery token and new password are required."}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters."}), 400
+
+    # The recovery token is issued by Supabase and may update only its matching
+    # Auth user. It is intentionally not exchanged for the application's JWT.
+    db = get_client()
+    try:
+        response = requests.put(
+            f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/auth/v1/user",
+            json={"password": password},
+            headers={
+                "apikey": os.environ.get("SUPABASE_SERVICE_KEY", ""),
+                "Authorization": f"Bearer {recovery_token}",
+            },
+            timeout=20,
+        )
+    except requests.RequestException:
+        log.exception("Password reset request could not reach Supabase")
+        return jsonify({"error": "Password reset is temporarily unavailable. Please try again."}), 503
+
+    if not response.ok:
+        log.warning("Supabase rejected password reset: status=%s", response.status_code)
+        return jsonify({"error": "This recovery link is invalid or has expired. Request a new one."}), 400
+
+    return jsonify({"message": "Password updated. You can now sign in."}), 200
 
 
 @auth_bp.post("/register")
