@@ -153,6 +153,9 @@ export async function evaluateShipment(shipmentId) {
     body: JSON.stringify({}),
   })
 }
+export async function refreshShipmentRoute(shipmentId) {
+  return request(`/shipments/${shipmentId}/route/refresh`, { method: 'POST', body: JSON.stringify({}) })
+}
 
 
 /* =========================
@@ -261,6 +264,7 @@ export const api = {
   listShipments,
   createShipment,
   evaluateShipment,
+  refreshShipmentRoute,
 
   approveRecommendation,
   rejectRecommendation,

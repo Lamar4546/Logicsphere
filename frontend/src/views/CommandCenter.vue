@@ -239,7 +239,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   font-size: 0.85rem;
 }
-.control-shell{--ink:#081422;--panel:#0d1d2e;--panel-2:#11263a;--line:#233c54;--text:#eaf4ff;--text-dim:#91a8bb;--signal:#3194ff;--risk-low:#43c999;--risk-medium:#f0b640;--risk-high:#ef8838;--risk-critical:#ff6674;min-height:calc(100dvh - 82px);margin:-1.25rem -2rem -2rem;padding:1.5rem 2rem 2rem;background:radial-gradient(circle at 78% 0%,#123c65 0,transparent 28%),#081422}
+.control-shell{min-height:calc(100dvh - 82px);margin:-1.25rem -2rem -2rem;padding:1.5rem 2rem 2rem;background:radial-gradient(circle at 78% 0%,color-mix(in srgb,var(--signal) 14%,transparent) 0,transparent 28%),var(--ink)}
 .banner.error {
   border-color: var(--risk-critical);
   color: #FFB4B4;

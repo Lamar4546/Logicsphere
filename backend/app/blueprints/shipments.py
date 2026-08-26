@@ -1,9 +1,12 @@
 import logging
 
+import requests
+
 from flask import Blueprint, g, jsonify, request
 from datetime import datetime, timezone
 from ..services.jwt import login_required
 from ..services.supabase_client import get_client
+from ..services.route_lookup import route_between
 from ..agents.central_manager import CentralAILogisticsManager
 
 shipments_bp = Blueprint("shipments", __name__)
@@ -39,9 +42,46 @@ def create_shipment():
         return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
     payload["organization_id"] = g.current_user["org"]
+    if payload.get("origin") and payload.get("destination"):
+        try:
+            route = route_between(payload["origin"], payload["destination"])
+            if route:
+                payload.update(route)
+            else:
+                payload["route_lookup_status"] = "not_found"
+        except Exception:
+            # Location enrichment must never prevent an operator or an
+            # integration from creating a shipment.
+            log.exception("Route lookup failed for shipment %s", payload.get("reference_number"))
+            payload["route_lookup_status"] = "unavailable"
     db = get_client()
     result = db.table("shipments").insert(payload).execute()
     return jsonify(result.data[0] if result.data else {}), 201
+
+
+@shipments_bp.post("/<shipment_id>/route/refresh")
+@login_required
+def refresh_route(shipment_id):
+    """Resolve a shipment's named route through Nominatim and OSRM."""
+    db = get_client()
+    rows = db.table("shipments").select("id, origin, destination").eq("id", shipment_id).eq(
+        "organization_id", g.current_user["org"]
+    ).limit(1).execute().data
+    if not rows:
+        return jsonify({"error": "Shipment not found for this organization."}), 404
+    shipment = rows[0]
+    if not shipment.get("origin") or not shipment.get("destination"):
+        return jsonify({"error": "Origin and destination are required to plan a route."}), 400
+    try:
+        route = route_between(shipment["origin"], shipment["destination"])
+    except requests.RequestException:
+        log.exception("Route refresh failed for %s", shipment_id)
+        route = None
+    if not route:
+        db.table("shipments").update({"route_lookup_status": "unavailable"}).eq("id", shipment_id).execute()
+        return jsonify({"error": "Route services could not resolve this journey. Try again later."}), 502
+    result = db.table("shipments").update(route).eq("id", shipment_id).eq("organization_id", g.current_user["org"]).execute()
+    return jsonify(result.data[0] if result.data else {}), 200
 
 
 @shipments_bp.post("/<shipment_id>/tracking")
