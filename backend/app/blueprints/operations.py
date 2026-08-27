@@ -6,6 +6,7 @@ from flask import Blueprint, g, jsonify, request
 
 from ..agents.operations_agent import OperationsAgent
 from ..services.jwt import login_required
+from ..services.route_lookup import route_between
 from ..services.supabase_client import get_client
 
 operations_bp = Blueprint("operations", __name__)
@@ -54,6 +55,15 @@ def _create_order_and_shipment(db, org, data):
         "priority": (data.get("priority") or "standard").strip().lower(),
     }).execute().data[0]
 
+    route_data = {}
+    if order.get("origin") and order.get("destination"):
+        try:
+            route_data = route_between(order["origin"], order["destination"]) or {"route_lookup_status": "not_found"}
+        except Exception:
+            # A public map outage must not prevent order intake or dispatch.
+            log.exception("Route lookup failed for order %s", reference_number)
+            route_data = {"route_lookup_status": "unavailable"}
+
     try:
         shipment = db.table("shipments").insert({
             "organization_id": org,
@@ -63,6 +73,7 @@ def _create_order_and_shipment(db, org, data):
             "destination": order.get("destination"),
             "status": "planned",
             "source_system": "order_dispatch",
+            **route_data,
         }).execute().data[0]
     except Exception as exc:
         # Avoid leaving a hidden order behind if the linking migration has not

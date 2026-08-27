@@ -9,6 +9,7 @@ const mapElement = ref(null)
 const tileIssue = ref(false)
 const routeLoading = ref(false)
 const routeError = ref('')
+const routeAttemptedFor = ref('')
 let map, marker, routeLine, endpointLayer
 const origin = computed(() => props.shipment.origin || 'Origin unavailable')
 const destination = computed(() => props.shipment.destination || 'Destination unavailable')
@@ -37,6 +38,11 @@ async function refreshRoute() {
     Object.assign(props.shipment, shipment)
   } catch (error) { routeError.value = error.message || 'Route could not be planned.' } finally { routeLoading.value = false }
 }
+async function ensureRoute() {
+  if (!props.shipment.origin || !props.shipment.destination || hasRoute.value || routeLoading.value || routeAttemptedFor.value === props.shipment.id) return
+  routeAttemptedFor.value = props.shipment.id
+  await refreshRoute()
+}
 function renderMap() {
   if (!mapElement.value) return
   if (!map) {
@@ -62,8 +68,8 @@ function renderMap() {
   } else if (!hasRoute.value) map.setView(coordinates.value, 2)
   nextTick(() => map.invalidateSize())
 }
-onMounted(renderMap)
-watch(() => props.shipment, renderMap, { deep: true })
+onMounted(() => { renderMap(); ensureRoute() })
+watch(() => props.shipment, () => { renderMap(); ensureRoute() }, { deep: true })
 onBeforeUnmount(() => map?.remove())
 </script>
 
