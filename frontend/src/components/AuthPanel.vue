@@ -3,9 +3,14 @@ import { computed, reactive, ref } from 'vue'
 import { api } from '../services/api.js'
 import logoUrl from '../assets/logisphere-logo.png'
 
-const recoveryToken = ref(new URLSearchParams(window.location.hash.slice(1)).get('access_token') || '')
-const mode = ref(new URLSearchParams(window.location.search).get('auth') === 'reset' && recoveryToken.value ? 'reset' : 'login')
-const error = ref('')
+const recoveryQuery = new URLSearchParams(window.location.search)
+const recoveryHash = new URLSearchParams(window.location.hash.slice(1))
+const recoveryToken = ref(recoveryHash.get('access_token') || '')
+const recoveryErrorCode = recoveryHash.get('error_code') || recoveryHash.get('error')
+const requestedReset = recoveryQuery.get('auth') === 'reset'
+const expiredRecoveryLink = requestedReset && Boolean(recoveryErrorCode)
+const mode = ref(expiredRecoveryLink ? 'forgot' : requestedReset && recoveryToken.value ? 'reset' : 'login')
+const error = ref(expiredRecoveryLink ? 'This password-reset link has expired or was already used. Request a new one below.' : '')
 const notice = ref('')
 const loading = ref(false)
 const showPassword = ref(false)
@@ -15,6 +20,11 @@ const resetForm = reactive({ email: '', password: '', confirmPassword: '' })
 const emit = defineEmits(['authenticated'])
 const title = computed(() => mode.value === 'login' ? 'Welcome back' : mode.value === 'register' ? 'Create your control tower' : mode.value === 'forgot' ? 'Reset your password' : 'Choose a new password')
 const subtitle = computed(() => mode.value === 'login' ? 'Sign in to manage autonomous logistics operations.' : mode.value === 'register' ? 'Set up your organization and let AI handle routine logistics work.' : mode.value === 'forgot' ? 'We will email a secure recovery link if this account exists.' : 'Set a new password for your LogiSphere account.')
+
+// Supabase returns an error in the URL fragment before the app loads when a
+// recovery OTP has expired. Remove it after translating it into a clear UI
+// state so refreshing this page does not repeat the dead recovery flow.
+if (expiredRecoveryLink) window.history.replaceState({}, '', window.location.pathname)
 
 function selectMode(nextMode) { mode.value = nextMode; error.value = ''; notice.value = ''; showPassword.value = false }
 async function doLogin() { error.value = ''; loading.value = true; try { await api.login({ email: loginForm.email.trim(), password: loginForm.password }); emit('authenticated') } catch (err) { error.value = err.message || String(err) } finally { loading.value = false } }
