@@ -6,12 +6,24 @@ from flask import Blueprint, g, jsonify, request
 
 from ..agents.operations_agent import OperationsAgent
 from ..services.jwt import login_required
+from ..services.minimax_client import MiniMaxError, chat, is_configured
 from ..services.route_lookup import route_between
 from ..services.supabase_client import get_client
 
 operations_bp = Blueprint("operations", __name__)
 operations_agent = OperationsAgent()
 log = logging.getLogger(__name__)
+
+
+def _record_order_event(db, org, order_id, event_type, details):
+    """Write an audit event when the optional audit migration is installed."""
+    try:
+        db.table("order_events").insert({
+            "organization_id": org, "order_id": order_id, "event_type": event_type,
+            "details": details, "created_by": g.current_user["sub"],
+        }).execute()
+    except Exception:
+        log.warning("Could not write order audit event; apply migration 011_order_change_audit.sql")
 
 
 @operations_bp.get("/overview")
@@ -24,7 +36,7 @@ def overview():
             "delivery_tasks": db.table("delivery_tasks").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data,
             "inventory": db.table("inventory_items").select("*").eq("organization_id", org).order("updated_at", desc=True).limit(50).execute().data,
             "returns": db.table("returns").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data,
-            "carrier_assignments": [], "financial_records": [],
+            "carrier_assignments": [], "financial_records": [], "order_events": [],
         }
         try:
             overview["carrier_assignments"] = db.table("carrier_assignments").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data
@@ -33,6 +45,10 @@ def overview():
             overview["integrations_ready"] = False
         else:
             overview["integrations_ready"] = True
+        try:
+            overview["order_events"] = db.table("order_events").select("*").eq("organization_id", org).order("created_at", desc=True).limit(30).execute().data
+        except Exception:
+            pass
         return jsonify(overview)
     except Exception as exc:
         return jsonify({"error": f"Operations tables unavailable. Apply migration 005_operations_control_plane.sql. Detail: {exc}"}), 503
@@ -105,6 +121,91 @@ def create_order():
         "shipment": created["shipment"],
         "agent_result": result.to_dict(),
     }), 201
+
+
+@operations_bp.patch("/orders/<order_id>")
+@login_required
+def update_order(order_id):
+    """Update operational fields after dispatch and keep linked work aligned."""
+    payload, org, db = request.get_json(force=True) or {}, g.current_user["org"], get_client()
+    rows = db.table("orders").select("*").eq("id", order_id).eq("organization_id", org).limit(1).execute().data
+    if not rows:
+        return jsonify({"error": "Order not found for this organization."}), 404
+    current = rows[0]
+    if current.get("status") == "cancelled":
+        return jsonify({"error": "Cancelled orders cannot be changed."}), 409
+
+    allowed = {"customer_name", "origin", "destination", "priority"}
+    changes = {key: (str(payload[key]).strip() or None) for key in allowed if key in payload}
+    if "priority" in changes and changes["priority"] not in {"standard", "urgent"}:
+        return jsonify({"error": "Priority must be standard or urgent."}), 400
+    if not changes:
+        return jsonify({"error": "Provide at least one editable order field."}), 400
+
+    updated_order = db.table("orders").update(changes).eq("id", order_id).eq("organization_id", org).execute().data[0]
+    shipment_changes = {key: changes[key] for key in ("origin", "destination") if key in changes}
+    if shipment_changes:
+        route_data = {}
+        if updated_order.get("origin") and updated_order.get("destination"):
+            try:
+                route_data = route_between(updated_order["origin"], updated_order["destination"]) or {"route_lookup_status": "not_found"}
+            except Exception:
+                log.exception("Route refresh failed for edited order %s", order_id)
+                route_data = {"route_lookup_status": "unavailable"}
+        shipment_changes.update(route_data)
+        db.table("shipments").update(shipment_changes).eq("order_id", order_id).eq("organization_id", org).execute()
+        tasks = db.table("delivery_tasks").select("id, route_plan").eq("order_id", order_id).eq("organization_id", org).execute().data
+        for task in tasks:
+            route_plan = {**(task.get("route_plan") or {}), "origin": updated_order.get("origin"), "destination": updated_order.get("destination")}
+            db.table("delivery_tasks").update({"route_plan": route_plan}).eq("id", task["id"]).execute()
+
+    _record_order_event(db, org, order_id, "order_updated", {"before": {key: current.get(key) for key in changes}, "after": changes})
+    return jsonify({"order": updated_order, "message": "Order and linked shipment details updated. Confirm carrier changes separately if already sent externally."})
+
+
+@operations_bp.delete("/orders/<order_id>")
+@login_required
+def cancel_order(order_id):
+    """Remove an order from active operations by cancelling, never erasing dispatch history."""
+    payload, org, db = request.get_json(silent=True) or {}, g.current_user["org"], get_client()
+    if payload.get("confirmation") != "CANCEL":
+        return jsonify({"error": "Type CANCEL to confirm removing this order from active operations."}), 400
+    rows = db.table("orders").select("id, reference_number, status").eq("id", order_id).eq("organization_id", org).limit(1).execute().data
+    if not rows:
+        return jsonify({"error": "Order not found for this organization."}), 404
+    order = rows[0]
+    db.table("orders").update({"status": "cancelled"}).eq("id", order_id).eq("organization_id", org).execute()
+    db.table("shipments").update({"status": "cancelled"}).eq("order_id", order_id).eq("organization_id", org).execute()
+    db.table("delivery_tasks").update({"status": "cancelled"}).eq("order_id", order_id).eq("organization_id", org).execute()
+    _record_order_event(db, org, order_id, "order_cancelled", {"previous_status": order.get("status")})
+    return jsonify({"message": f"{order['reference_number']} was cancelled and removed from active dispatch. The audit history was retained."})
+
+
+@operations_bp.post("/assistant")
+@login_required
+def ask_operations_assistant():
+    """Return MiniMax advice without allowing conversational side effects."""
+    payload, org = request.get_json(force=True) or {}, g.current_user["org"]
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "Enter a question for the AI assistant."}), 400
+    if len(message) > 2000:
+        return jsonify({"error": "Keep questions under 2,000 characters."}), 400
+
+    db = get_client()
+    orders = db.table("orders").select("reference_number, status, origin, destination, priority").eq("organization_id", org).order("created_at", desc=True).limit(12).execute().data
+    inventory = db.table("inventory_items").select("sku, name, quantity, reorder_point").eq("organization_id", org).limit(20).execute().data
+    context = {"recent_orders": orders, "inventory": inventory}
+    if is_configured():
+        try:
+            reply = chat([
+                {"role": "system", "content": "You are LogiSphere's logistics operations assistant. Give concise operational feedback using the supplied workspace facts. You may explain, prioritise, and suggest next steps, but you cannot create, edit, cancel, dispatch, spend money, or communicate externally. State when human approval is required for money or critical exceptions."},
+                {"role": "user", "content": f"Workspace facts: {context}\n\nUser question: {message}"},
+            ], temperature=0.35)
+            return jsonify({"reply": reply.strip(), "provider": "minimax"})
+        except MiniMaxError:
+            log.exception("MiniMax operations assistant request failed")
+    return jsonify({"reply": f"I can review {len(orders)} recent order(s) and {len(inventory)} inventory item(s), but MiniMax is not available right now. Check MINIMAX_API_KEY, then ask again. I will not make changes from chat.", "provider": "deterministic_fallback"})
 
 
 @operations_bp.post("/orders/import")

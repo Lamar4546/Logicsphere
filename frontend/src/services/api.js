@@ -233,6 +233,9 @@ export async function importOrdersCsv(file) {
 ========================= */
 export async function getOperationsOverview() { return request('/operations/overview') }
 export async function createOrder(payload) { return request('/operations/orders', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function updateOrder(orderId, payload) { return request(`/operations/orders/${orderId}`, { method: 'PATCH', body: JSON.stringify(payload) }) }
+export async function cancelOrder(orderId) { return request(`/operations/orders/${orderId}`, { method: 'DELETE', body: JSON.stringify({ confirmation: 'CANCEL' }) }) }
+export async function askOperationsAssistant(message) { return request('/operations/assistant', { method: 'POST', body: JSON.stringify({ message }) }) }
 export async function upsertInventory(payload) { return request('/operations/inventory', { method: 'POST', body: JSON.stringify(payload) }) }
 export async function createReturn(payload) { return request('/operations/returns', { method: 'POST', body: JSON.stringify(payload) }) }
 
@@ -272,6 +275,9 @@ export const api = {
   approveCommunicationAndExecute,
   getOperationsOverview,
   createOrder,
+  updateOrder,
+  cancelOrder,
+  askOperationsAssistant,
   importOrdersCsv,
   upsertInventory,
   createReturn,
