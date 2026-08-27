@@ -16,7 +16,9 @@ import os
 import requests
 
 DEFAULT_API_URL = "https://api.minimax.io/v1/chat/completions"
-DEFAULT_MODEL = "MiniMax-M3"
+# MiniMax's current OpenAI-compatible text endpoint supports this model.
+# Deployments can still override it with MINIMAX_MODEL.
+DEFAULT_MODEL = "MiniMax-M2.7"
 
 
 class MiniMaxError(RuntimeError):

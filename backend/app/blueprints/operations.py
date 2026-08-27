@@ -196,16 +196,23 @@ def ask_operations_assistant():
     orders = db.table("orders").select("reference_number, status, origin, destination, priority").eq("organization_id", org).order("created_at", desc=True).limit(12).execute().data
     inventory = db.table("inventory_items").select("sku, name, quantity, reorder_point").eq("organization_id", org).limit(20).execute().data
     context = {"recent_orders": orders, "inventory": inventory}
-    if is_configured():
-        try:
-            reply = chat([
-                {"role": "system", "content": "You are LogiSphere's logistics operations assistant. Give concise operational feedback using the supplied workspace facts. You may explain, prioritise, and suggest next steps, but you cannot create, edit, cancel, dispatch, spend money, or communicate externally. State when human approval is required for money or critical exceptions."},
-                {"role": "user", "content": f"Workspace facts: {context}\n\nUser question: {message}"},
-            ], temperature=0.35)
-            return jsonify({"reply": reply.strip(), "provider": "minimax"})
-        except MiniMaxError:
-            log.exception("MiniMax operations assistant request failed")
-    return jsonify({"reply": f"I can review {len(orders)} recent order(s) and {len(inventory)} inventory item(s), but MiniMax is not available right now. Check MINIMAX_API_KEY, then ask again. I will not make changes from chat.", "provider": "deterministic_fallback"})
+    if not is_configured():
+        return jsonify({
+            "reply": "MiniMax has not been configured on this backend yet. An administrator must add MINIMAX_API_KEY in the hosting service’s environment settings, then redeploy. I will not make changes from chat.",
+            "provider": "deterministic_fallback", "provider_status": "not_configured",
+        })
+    try:
+        reply = chat([
+            {"role": "system", "content": "You are LogiSphere's logistics operations assistant. Give concise operational feedback using the supplied workspace facts. You may explain, prioritise, and suggest next steps, but you cannot create, edit, cancel, dispatch, spend money, or communicate externally. State when human approval is required for money or critical exceptions."},
+            {"role": "user", "content": f"Workspace facts: {context}\n\nUser question: {message}"},
+        ], temperature=0.35)
+        return jsonify({"reply": reply.strip(), "provider": "minimax", "provider_status": "ready"})
+    except MiniMaxError:
+        log.exception("MiniMax operations assistant request failed")
+        return jsonify({
+            "reply": "MiniMax is configured but did not respond. Check the Render service logs for the MiniMax request failure, then try again. I will not make changes from chat.",
+            "provider": "deterministic_fallback", "provider_status": "request_failed",
+        })
 
 
 @operations_bp.post("/orders/import")
