@@ -22,7 +22,7 @@ def list_shipments():
     try:
         result = (
             db.table("shipments")
-            .select("*, orders(status)")
+            .select("*")
             .eq("organization_id", organization_id)
             # Cancelled orders are retained for audit, but they must not show
             # up as live, trackable work in the Command Center.
@@ -30,10 +30,10 @@ def list_shipments():
             .order("created_at", desc=True)
             .execute()
         )
-        # A cancelled order must never be surfaced as a live shipment, even
-        # if an older linked shipment was left in a non-cancelled state.
-        visible = [row for row in result.data if (row.get("orders") or {}).get("status") != "cancelled"]
-        return jsonify(visible)
+        # Current cancellations directly set the linked shipment's status to
+        # cancelled, which the query above excludes without relying on a
+        # PostgREST relationship that might not exist before migration 008.
+        return jsonify(result.data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

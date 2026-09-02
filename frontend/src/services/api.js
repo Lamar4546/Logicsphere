@@ -12,6 +12,12 @@ export function clearAuthToken() {
   localStorage.removeItem(AUTH_TOKEN_KEY)
 }
 
+function expireSession() {
+  clearAuthToken()
+  localStorage.removeItem('ls_user')
+  window.dispatchEvent(new Event('ls:auth-expired'))
+}
+
 export function getAuthToken() {
   return localStorage.getItem(AUTH_TOKEN_KEY) || ''
 }
@@ -47,8 +53,7 @@ async function request(path, options = {}) {
     console.error('[API ERROR]', response.status, body)
 
     if (response.status === 401) {
-      clearAuthToken()
-      localStorage.removeItem('ls_user')
+      expireSession()
     }
 
     const error = new Error(

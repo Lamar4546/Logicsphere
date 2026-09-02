@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import CommandCenter from './views/CommandCenter.vue'
 import OperationsConsole from './views/OperationsConsole.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -20,6 +20,7 @@ const showTutorial = ref(!!getAuthToken() && !localStorage.getItem('ls_tutorial_
 const pageTitle = computed(() => ({ shipments: 'Control Tower', operations: 'Operations Center', settings: 'Settings' }[activeWorkspace.value]))
 function handleAuthenticated() { currentUser.value = JSON.parse(localStorage.getItem('ls_user') || 'null'); isAuthenticated.value = true; showTutorial.value = !localStorage.getItem('ls_tutorial_complete') }
 function handleLogout() { logout(); profileMenuOpen.value = false; isAuthenticated.value = false }
+function handleAuthExpired() { profileMenuOpen.value = false; currentUser.value = null; isAuthenticated.value = false }
 function setWorkspace(workspace, tab) { activeWorkspace.value = workspace; profileMenuOpen.value = false; if (tab) operationsTab.value = tab }
 function setCommandWorkspace(tab = 'tracking') { activeWorkspace.value = 'shipments'; commandTab.value = tab; profileMenuOpen.value = false }
 function openSettings() { setWorkspace('settings') }
@@ -28,7 +29,8 @@ function setTheme(nextTheme) { theme.value = nextTheme; localStorage.setItem('ls
 function handleAccountDeleted() { logout(); isAuthenticated.value = false; activeWorkspace.value = 'shipments' }
 function handleProfileUpdated(user) { currentUser.value = user; localStorage.setItem('ls_user', JSON.stringify(user)); profileMenuOpen.value = false }
 async function hydrateProfile() { if (!isAuthenticated.value) return; try { handleProfileUpdated((await api.getProfile()).user) } catch { /* expired sessions are handled by the next protected request */ } }
-onMounted(hydrateProfile)
+onMounted(() => { hydrateProfile(); window.addEventListener('ls:auth-expired', handleAuthExpired) })
+onBeforeUnmount(() => window.removeEventListener('ls:auth-expired', handleAuthExpired))
 </script>
 
 <template>
