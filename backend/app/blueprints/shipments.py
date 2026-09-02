@@ -22,12 +22,18 @@ def list_shipments():
     try:
         result = (
             db.table("shipments")
-            .select("*")
+            .select("*, orders(status)")
             .eq("organization_id", organization_id)
+            # Cancelled orders are retained for audit, but they must not show
+            # up as live, trackable work in the Command Center.
+            .neq("status", "cancelled")
             .order("created_at", desc=True)
             .execute()
         )
-        return jsonify(result.data)
+        # A cancelled order must never be surfaced as a live shipment, even
+        # if an older linked shipment was left in a non-cancelled state.
+        visible = [row for row in result.data if (row.get("orders") or {}).get("status") != "cancelled"]
+        return jsonify(visible)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

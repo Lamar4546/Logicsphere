@@ -175,8 +175,10 @@ def cancel_order(order_id):
         return jsonify({"error": "Order not found for this organization."}), 404
     order = rows[0]
     db.table("orders").update({"status": "cancelled"}).eq("id", order_id).eq("organization_id", org).execute()
-    db.table("shipments").update({"status": "cancelled"}).eq("order_id", order_id).eq("organization_id", org).execute()
+    shipment_result = db.table("shipments").update({"status": "cancelled"}).eq("order_id", order_id).eq("organization_id", org).execute()
     db.table("delivery_tasks").update({"status": "cancelled"}).eq("order_id", order_id).eq("organization_id", org).execute()
+    if not shipment_result.data:
+        log.warning("Cancelled order %s has no linked shipment. Apply migration 008_order_shipment_link.sql to link orders and tracking.", order_id)
     _record_order_event(db, org, order_id, "order_cancelled", {"previous_status": order.get("status")})
     return jsonify({"message": f"{order['reference_number']} was cancelled and removed from active dispatch. The audit history was retained."})
 

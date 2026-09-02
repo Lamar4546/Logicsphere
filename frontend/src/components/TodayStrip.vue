@@ -39,5 +39,5 @@ const inTransit = computed(() => props.shipments.filter((item) => ['in_transit',
   font-weight: 600;
   color: var(--signal);
 }
-@media(max-width:760px){.strip{grid-template-columns:1fr 1fr}.stat{min-width:0}}
+@media(max-width:760px){.strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem;width:100%}.stat{min-width:0;padding:.85rem}.label{font-size:.59rem;line-height:1.3}.value{font-size:1.55rem}}
 </style>
