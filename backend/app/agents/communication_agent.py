@@ -7,7 +7,7 @@ monetary workflows are sent only after their required human approval.
 """
 from .base import BaseAgent, AgentOutput
 from ..services.supabase_client import get_client
-from ..services.minimax_client import MiniMaxError, chat, is_configured
+from ..services.minimax_client import MiniMaxError, chat, is_configured, provider_name
 
 
 class CommunicationAgent(BaseAgent):
@@ -41,7 +41,7 @@ class CommunicationAgent(BaseAgent):
                     ],
                     temperature=0.2,
                 )
-                generated_by = "minimax"
+                generated_by = provider_name()
             except MiniMaxError:
                 pass
 

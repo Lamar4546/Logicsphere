@@ -1,7 +1,7 @@
 """Autonomous operational decisions for orders, inventory and returns."""
 from .base import BaseAgent, AgentOutput
 from ..services.supabase_client import get_client
-from ..services.minimax_client import MiniMaxError, chat_json, is_configured
+from ..services.minimax_client import MiniMaxError, chat_json, is_configured, provider_name
 
 
 class OperationsAgent(BaseAgent):
@@ -29,7 +29,7 @@ class OperationsAgent(BaseAgent):
             "status": "dispatched",
         }).execute().data[0]
         get_client().table("orders").update({"status": "dispatched"}).eq("id", order["id"]).execute()
-        return AgentOutput("action", f"Dispatched order {order['reference_number']} automatically.", {"task": task, "ai_provider": "minimax" if reasoning else "deterministic"})
+        return AgentOutput("action", f"Dispatched order {order['reference_number']} automatically.", {"task": task, "ai_provider": provider_name() if reasoning else "deterministic"})
 
     def _review_inventory(self, organization_id, item):
         low = item.get("quantity", 0) <= item.get("reorder_point", 0)

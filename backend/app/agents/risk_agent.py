@@ -7,7 +7,7 @@ this is the "system displays the shipment as at risk" step (§10.2 step 5).
 """
 from .base import BaseAgent, AgentOutput
 from ..services.supabase_client import get_client
-from ..services.minimax_client import MiniMaxError, chat_json, is_configured
+from ..services.minimax_client import MiniMaxError, chat_json, is_configured, provider_name
 
 # Thresholds are a starting configuration, not a hardcoded business rule —
 # SRS §5.3 calls for these to be "configurable according to customer policies"
@@ -72,7 +72,7 @@ class RiskAgent(BaseAgent):
                 "delay_hours": delay_hours,
                 "risk_alert_id": alert.data[0]["id"] if alert.data else None,
                 "ai_reasoning": ai_reasoning,
-                "ai_provider": "minimax" if ai_reasoning else "deterministic_fallback",
+                "ai_provider": provider_name() if ai_reasoning else "deterministic_fallback",
             },
             confidence=self._confidence_for(severity),
         )

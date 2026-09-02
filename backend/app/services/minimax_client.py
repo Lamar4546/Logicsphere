@@ -15,10 +15,10 @@ import json
 import os
 import requests
 
-DEFAULT_API_URL = "https://api.minimax.io/v1/chat/completions"
+DEFAULT_API_URL = "https://router.huggingface.co/v1/chat/completions"
 # MiniMax's current OpenAI-compatible text endpoint supports this model.
 # Deployments can still override it with MINIMAX_MODEL.
-DEFAULT_MODEL = "MiniMax-M2.7"
+DEFAULT_MODEL = "openai/gpt-oss-120b:fastest"
 
 
 class MiniMaxError(RuntimeError):
@@ -26,8 +26,27 @@ class MiniMaxError(RuntimeError):
 
 
 def is_configured() -> bool:
-    """Whether the service can make a live MiniMax request."""
-    return bool(os.environ.get("MINIMAX_API_KEY"))
+    """Whether a supported OpenAI-compatible provider has a key."""
+    return bool(os.environ.get("HF_TOKEN") or os.environ.get("AI_API_KEY") or os.environ.get("MINIMAX_API_KEY"))
+
+
+def provider_name() -> str:
+    """Human-safe provider label; credentials are never returned."""
+    default = "huggingface" if os.environ.get("HF_TOKEN") else "minimax"
+    return os.environ.get("AI_PROVIDER", default).strip().lower() or default
+
+
+def _api_key() -> str | None:
+    # MINIMAX_* remains supported so existing deployments do not break.
+    return os.environ.get("HF_TOKEN") or os.environ.get("AI_API_KEY") or os.environ.get("MINIMAX_API_KEY")
+
+
+def _api_url() -> str:
+    return os.environ.get("HF_API_URL") or os.environ.get("AI_API_URL") or os.environ.get("MINIMAX_API_URL") or DEFAULT_API_URL
+
+
+def _model() -> str:
+    return os.environ.get("HF_MODEL") or os.environ.get("AI_MODEL") or os.environ.get("MINIMAX_MODEL") or DEFAULT_MODEL
 
 
 def chat(messages: list[dict], *, json_mode: bool = False, temperature: float = 0.3) -> str:
@@ -39,12 +58,12 @@ def chat(messages: list[dict], *, json_mode: bool = False, temperature: float = 
     MiniMax outage never silently corrupts a recommendation, it either
     degrades to a known-safe rule-based path or surfaces clearly.
     """
-    api_key = os.environ.get("MINIMAX_API_KEY")
+    api_key = _api_key()
     if not api_key:
-        raise MiniMaxError("MINIMAX_API_KEY is not set.")
+        raise MiniMaxError("No AI provider API key is set.")
 
     payload = {
-        "model": os.environ.get("MINIMAX_MODEL", DEFAULT_MODEL),
+        "model": _model(),
         "messages": messages,
         "temperature": temperature,
         "stream": False,
@@ -57,7 +76,7 @@ def chat(messages: list[dict], *, json_mode: bool = False, temperature: float = 
 
     try:
         resp = requests.post(
-            os.environ.get("MINIMAX_API_URL", DEFAULT_API_URL),
+            _api_url(),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -68,12 +87,12 @@ def chat(messages: list[dict], *, json_mode: bool = False, temperature: float = 
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
-        raise MiniMaxError(f"MiniMax request failed: {exc}") from exc
+        raise MiniMaxError(f"{provider_name()} request failed: {exc}") from exc
 
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
-        raise MiniMaxError(f"Unexpected MiniMax response shape: {data}") from exc
+        raise MiniMaxError(f"Unexpected {provider_name()} response shape: {data}") from exc
 
 
 def chat_json(messages: list[dict], *, temperature: float = 0.2) -> dict:
