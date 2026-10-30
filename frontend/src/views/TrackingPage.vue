@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { getPublicTracking } from '../services/api.js'
+import PageSkeleton from '../components/PageSkeleton.vue'
 
 // URL shape: /track/<token>
 const token = decodeURIComponent(window.location.pathname.split('/')[2] || '')
@@ -109,7 +110,7 @@ onBeforeUnmount(() => { stop(); map?.remove() })
   <main class="track">
     <header class="top"><strong class="display">LogiSphere</strong><span class="mono dim">SHIPMENT TRACKING</span></header>
 
-    <p v-if="loading" class="dim">Loading your shipment…</p>
+    <PageSkeleton v-if="loading" variant="tracking" />
 
     <section v-else-if="error" class="panel state">
       <h1>We couldn't open this link</h1>

@@ -8,6 +8,7 @@ import RecommendationCard from '../components/RecommendationCard.vue'
 import CommunicationCard from '../components/CommunicationCard.vue'
 import FleetOverviewMap from '../components/FleetOverviewMap.vue'
 import AttentionList from '../components/AttentionList.vue'
+import PageSkeleton from '../components/PageSkeleton.vue'
 const FleetGlobe = defineAsyncComponent(() => import('../components/FleetGlobe.vue'))
 const props = defineProps({ initialTab: { type: String, default: 'tracking' }, searchQuery: { type: String, default: '' } })
 const emit = defineEmits(['pending-approvals'])
@@ -179,7 +180,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="control-shell">
     <div v-if="errorMessage" class="banner error">{{ errorMessage }}</div>
-    <div v-if="loading" class="banner">Loading command center…</div>
+    <PageSkeleton v-if="loading" :variant="activeTab === 'tracking' ? 'dashboard' : activeTab === 'shipments' ? 'shipments' : 'list'" />
 
     <template v-else>
       <section v-if="activeTab==='shipments'" class="stage shipments-page"><div class="section-heading"><div><h2 class="section-title">Shipments</h2><p class="dim">Search, inspect, track, and evaluate shipments.</p></div><div class="heading-actions"><button class="refresh" :disabled="!selectedShipment || creatingTrackingLink" @click="createTrackingLink">{{ creatingTrackingLink ? 'Creating link…' : 'Share tracking link' }}</button><button class="refresh" @click="refreshAll">Refresh</button></div></div><ShipmentList :shipments="visibleShipments" :selected-id="selectedShipment?.id" :evaluating-id="evaluatingId" @evaluate="handleEvaluate" @select="selectedShipment = $event; publicTrackingUrl = ''" @track="handleTrackShipment" /><div v-if="publicTrackingUrl" class="share-link panel"><label for="public-track-link">Customer tracking link</label><input id="public-track-link" :value="publicTrackingUrl" readonly /><button @click="copyTrackingLink">Copy link</button></div><details class="new-shipment"><summary>+ Add or import shipment</summary><ShipmentIntakeForm @created="handleShipmentCreated" /></details><p class="sync-note">{{ refreshedAt ? `Last synced ${refreshedAt.toLocaleTimeString()}` : 'Waiting for shipment data…' }}</p></section>
