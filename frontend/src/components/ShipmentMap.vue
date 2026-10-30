@@ -41,7 +41,7 @@ function renderMap() {
   if (!mapElement.value) return
   if (!map) {
     map = L.map(mapElement.value, { zoomControl: true }).setView(coordinates.value, hasLocation.value ? 7 : 2)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' })
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' })
       .on('tileerror', () => { tileIssue.value = true })
       .addTo(map)
   }

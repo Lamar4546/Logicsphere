@@ -9,7 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "cesium": "^1.146.0",
     "leaflet": "^1.9.4",
+    "lucide-vue-next": "^1.0.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
     "vue-router": "^4.3.0"

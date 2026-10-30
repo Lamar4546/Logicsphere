@@ -20,7 +20,7 @@ async function reject() {
 <template>
   <div class="panel card">
     <div class="head">
-      <span class="badge mono">AI Recommendation</span>
+      <span class="badge mono">Suggested action</span>
       <span class="confidence mono dim" v-if="recommendation.confidence">
         {{ Math.round(recommendation.confidence * 100) }}% confidence
       </span>
@@ -48,7 +48,7 @@ async function reject() {
     </div>
 
     <div class="buttons">
-      <button class="primary" :disabled="busy" @click="approve">Approve</button>
+      <button class="primary" :disabled="busy" @click="approve">Approve &amp; Dispatch</button>
       <button class="ghost" :disabled="busy" @click="reject">Reject</button>
     </div>
   </div>

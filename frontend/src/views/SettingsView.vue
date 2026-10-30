@@ -17,6 +17,7 @@ const themes = [
   { id: 'midnight', name: 'Midnight', description: 'A focused dark operations theme for low-light work.' },
   { id: 'obsidian', name: 'Obsidian', description: 'A true dark high-contrast theme for command-center work.' },
   { id: 'slate', name: 'Slate', description: 'A muted professional neutral palette.' },
+  { id: 'figma', name: 'LogiSphere Light', description: 'Clean light theme matching the product mockups.' },
 ]
 
 function chooseTheme(id) { emit('update-theme', id) }

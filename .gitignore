@@ -1,4 +1,5 @@
 node_modules/
+frontend/public/cesium/
 dist/
 venv/
 __pycache__/

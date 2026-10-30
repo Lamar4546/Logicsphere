@@ -29,7 +29,7 @@ def create_app():
     # Register blueprints (import inside factory to avoid import-time side effects)
     from .blueprints.auth import auth_bp
     from .blueprints.command_center import command_center_bp
-    from .blueprints.shipments import shipments_bp
+    from .blueprints.shipments import shipments_bp, public_tracking_bp
     from .blueprints.recommendations import recommendations_bp
     from .blueprints.workflows import workflows_bp
     from .blueprints.operations import operations_bp
@@ -39,6 +39,7 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(command_center_bp, url_prefix="/api/command-center")
     app.register_blueprint(shipments_bp, url_prefix="/api/shipments")
+    app.register_blueprint(public_tracking_bp, url_prefix="/api/track")
     app.register_blueprint(recommendations_bp, url_prefix="/api/recommendations")
     app.register_blueprint(workflows_bp, url_prefix="/api/workflows")
     app.register_blueprint(operations_bp, url_prefix="/api/operations")

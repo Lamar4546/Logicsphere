@@ -161,6 +161,12 @@ export async function evaluateShipment(shipmentId) {
 export async function refreshShipmentRoute(shipmentId) {
   return request(`/shipments/${shipmentId}/route/refresh`, { method: 'POST', body: JSON.stringify({}) })
 }
+export async function updateShipmentTracking(shipmentId, telemetry) {
+  return request(`/shipments/${shipmentId}/tracking`, { method: 'POST', body: JSON.stringify(telemetry) })
+}
+export async function createPublicTrackingLink(shipmentId) {
+  return request(`/shipments/${shipmentId}/public-tracking-link`, { method: 'POST', body: JSON.stringify({}) })
+}
 
 
 /* =========================
@@ -237,6 +243,11 @@ export async function importOrdersCsv(file) {
    OPERATIONS CONTROL PLANE
 ========================= */
 export async function getOperationsOverview() { return request('/operations/overview') }
+export async function getOperationsRules() { return request('/operations/rules') }
+export async function recordDeliveryProof(payload) { return request('/operations/delivery-proofs', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function createFleetVehicle(payload) { return request('/operations/fleet-vehicles', { method: 'POST', body: JSON.stringify(payload) }) }
+export async function assignShipmentToVehicle(vehicleId, payload) { return request(`/operations/fleet-vehicles/${vehicleId}/loads`, { method: 'POST', body: JSON.stringify(payload) }) }
+export async function removeFleetLoad(loadId) { return request(`/operations/fleet-loads/${loadId}`, { method: 'DELETE' }) }
 export async function createOrder(payload) { return request('/operations/orders', { method: 'POST', body: JSON.stringify(payload) }) }
 export async function updateOrder(orderId, payload) { return request(`/operations/orders/${orderId}`, { method: 'PATCH', body: JSON.stringify(payload) }) }
 export async function cancelOrder(orderId) { return request(`/operations/orders/${orderId}`, { method: 'DELETE', body: JSON.stringify({ confirmation: 'CANCEL' }) }) }
@@ -252,6 +263,18 @@ export async function syncIntegrationRecords(payload) { return request('/integra
 export async function listIntegrationConnections() { return request('/integrations/connections') }
 export async function saveIntegrationConnection(payload) { return request('/integrations/connections', { method: 'POST', body: JSON.stringify(payload) }) }
 
+/* =========================
+   PUBLIC CUSTOMER TRACKING (no login)
+========================= */
+
+// Plain fetch on purpose: the public page must never send a staff token, and a
+// failed lookup must not log anyone out.
+export async function getPublicTracking(token) {
+  const response = await fetch(`${BASE}/track/${encodeURIComponent(token)}`)
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(body.error || 'This tracking link is invalid or has expired.')
+  return body
+}
 
 /* =========================
    API OBJECT
@@ -273,12 +296,19 @@ export const api = {
   createShipment,
   evaluateShipment,
   refreshShipmentRoute,
+  updateShipmentTracking,
+  createPublicTrackingLink,
 
   approveRecommendation,
   rejectRecommendation,
 
   approveCommunicationAndExecute,
   getOperationsOverview,
+  getOperationsRules,
+  recordDeliveryProof,
+  createFleetVehicle,
+  assignShipmentToVehicle,
+  removeFleetLoad,
   createOrder,
   updateOrder,
   cancelOrder,

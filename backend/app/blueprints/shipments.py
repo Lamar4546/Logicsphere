@@ -1,4 +1,6 @@
 import logging
+import hashlib
+import secrets
 
 import requests
 
@@ -10,8 +12,39 @@ from ..services.route_lookup import route_between
 from ..agents.central_manager import CentralAILogisticsManager
 
 shipments_bp = Blueprint("shipments", __name__)
+public_tracking_bp = Blueprint("public_tracking", __name__)
 central_manager = CentralAILogisticsManager()
 log = logging.getLogger(__name__)
+
+
+@shipments_bp.post("/<shipment_id>/public-tracking-link")
+@login_required
+def create_public_tracking_link(shipment_id):
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    result = get_client().table("shipments").update({"public_tracking_token_hash": token_hash}).eq(
+        "id", shipment_id
+    ).eq("organization_id", g.current_user["org"]).execute()
+    if not result.data:
+        return jsonify({"error": "Shipment not found for this organization."}), 404
+    return jsonify({"tracking_path": f"/track/{token}", "reference_number": result.data[0].get("reference_number")}), 201
+
+
+@public_tracking_bp.get("/<token>")
+def public_tracking(token):
+    if len(token) < 32 or len(token) > 100:
+        return jsonify({"error": "This tracking link is invalid or has expired."}), 404
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    try:
+        rows = get_client().table("shipments").select(
+            "reference_number,status,origin,destination,eta_current,current_latitude,current_longitude,route_geometry,last_event_description,tracking_updated_at"
+        ).eq("public_tracking_token_hash", token_hash).limit(1).execute().data
+    except Exception:
+        log.exception("Public shipment lookup failed")
+        return jsonify({"error": "Shipment tracking is temporarily unavailable."}), 503
+    if not rows:
+        return jsonify({"error": "This tracking link is invalid or has expired."}), 404
+    return jsonify(rows[0])
 
 
 @shipments_bp.get("")
@@ -107,6 +140,25 @@ def update_tracking(shipment_id):
         "current_longitude": longitude,
         "tracking_updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    for field in ("current_altitude", "current_heading"):
+        if payload.get(field) is None:
+            continue
+        try:
+            value = float(payload[field])
+        except (TypeError, ValueError):
+            return jsonify({"error": f"{field} must be numeric."}), 400
+        if field == "current_altitude" and not -1000 <= value <= 100000:
+            return jsonify({"error": "Altitude is outside the supported range in meters."}), 400
+        if field == "current_heading" and not 0 <= value < 360:
+            return jsonify({"error": "Heading must be between 0 and 360 degrees."}), 400
+        changes[field] = value
+    if payload.get("transport_mode"):
+        mode = str(payload["transport_mode"]).lower()
+        if mode not in {"plane", "ship", "truck"}:
+            return jsonify({"error": "transport_mode must be plane, ship, or truck."}), 400
+        changes["transport_mode"] = mode
+    if payload.get("tracking_source"):
+        changes["tracking_source"] = str(payload["tracking_source"])[:80]
     if payload.get("last_event_description"):
         changes["last_event_description"] = payload["last_event_description"]
     if payload.get("eta_current"):

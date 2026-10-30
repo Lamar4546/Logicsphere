@@ -1,10 +1,16 @@
 import csv
+import base64
+import binascii
 import io
 import logging
+import math
+import re
 
 from flask import Blueprint, g, jsonify, request
 
 from ..agents.operations_agent import OperationsAgent
+from ..agents.risk_agent import DELAY_THRESHOLDS_HOURS
+from ..autonomy.policy_engine import PolicyEngine
 from ..services.jwt import login_required
 from ..services.minimax_client import MiniMaxError, chat, is_configured, provider_name
 from ..services.route_lookup import route_between
@@ -12,6 +18,7 @@ from ..services.supabase_client import get_client
 
 operations_bp = Blueprint("operations", __name__)
 operations_agent = OperationsAgent()
+policy_engine = PolicyEngine()
 log = logging.getLogger(__name__)
 
 
@@ -33,10 +40,13 @@ def overview():
     try:
         overview = {
             "orders": db.table("orders").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data,
+            "shipments": db.table("shipments").select("id, order_id, reference_number, status, origin, destination").eq("organization_id", org).order("created_at", desc=True).limit(100).execute().data,
             "delivery_tasks": db.table("delivery_tasks").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data,
+            "delivery_proofs": db.table("delivery_proofs").select("id, shipment_id, recipient_name, delivered_at").eq("organization_id", org).order("delivered_at", desc=True).limit(50).execute().data,
             "inventory": db.table("inventory_items").select("*").eq("organization_id", org).order("updated_at", desc=True).limit(50).execute().data,
             "returns": db.table("returns").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data,
             "carrier_assignments": [], "financial_records": [], "order_events": [],
+            "fleet_vehicles": [], "fleet_vehicle_loads": [], "fleet_planning_ready": False,
         }
         try:
             overview["carrier_assignments"] = db.table("carrier_assignments").select("*").eq("organization_id", org).order("created_at", desc=True).limit(20).execute().data
@@ -49,9 +59,163 @@ def overview():
             overview["order_events"] = db.table("order_events").select("*").eq("organization_id", org).order("created_at", desc=True).limit(30).execute().data
         except Exception:
             pass
+        try:
+            overview["fleet_vehicles"] = db.table("fleet_vehicles").select("*").eq("organization_id", org).order("created_at", desc=True).limit(100).execute().data
+            overview["fleet_vehicle_loads"] = db.table("fleet_vehicle_loads").select("*").eq("organization_id", org).limit(500).execute().data
+            overview["fleet_planning_ready"] = True
+        except Exception:
+            pass
         return jsonify(overview)
     except Exception as exc:
         return jsonify({"error": f"Operations tables unavailable. Apply migration 005_operations_control_plane.sql. Detail: {exc}"}), 503
+
+
+@operations_bp.get("/rules")
+@login_required
+def list_system_rules():
+    """Expose the active deterministic risk and approval policy to operators."""
+    return jsonify({
+        "delay_thresholds_hours": DELAY_THRESHOLDS_HOURS,
+        "action_policy": policy_engine.describe_rules(),
+    })
+
+
+@operations_bp.post("/delivery-proofs")
+@login_required
+def record_delivery_proof():
+    """Record real recipient/signature evidence and close the linked delivery."""
+    payload, org, db = request.get_json(force=True) or {}, g.current_user["org"], get_client()
+    shipment_id = payload.get("shipment_id")
+    recipient = str(payload.get("recipient_name") or "").strip()
+    signature = str(payload.get("signature_data_url") or "")
+    photo = str(payload.get("photo_data_url") or "") or None
+    if not shipment_id or not recipient or len(recipient) > 160:
+        return jsonify({"error": "A shipment and recipient name are required."}), 400
+
+    def valid_image_data_url(value, required=False):
+        if not value:
+            return not required
+        match = re.fullmatch(r"data:image/(png|jpeg);base64,([A-Za-z0-9+/=]+)", value)
+        if not match or len(value) > 1_500_000:
+            return False
+        try:
+            base64.b64decode(match.group(2), validate=True)
+            return True
+        except (ValueError, binascii.Error):
+            return False
+
+    if not valid_image_data_url(signature, required=True) or not valid_image_data_url(photo):
+        return jsonify({"error": "Signature and photo must be PNG/JPEG images under 1.5 MB."}), 400
+
+    task_id = payload.get("task_id")
+    if task_id:
+        tasks = db.table("delivery_tasks").select("id, shipment_id, order_id").eq("id", task_id).eq("organization_id", org).limit(1).execute().data
+        if not tasks or str(tasks[0].get("shipment_id")) != str(shipment_id):
+            return jsonify({"error": "Delivery task and shipment do not match this organization."}), 404
+        task = tasks[0]
+    else:
+        task = None
+
+    shipment = db.table("shipments").select("id, order_id").eq("id", shipment_id).eq("organization_id", org).limit(1).execute().data
+    if not shipment:
+        return jsonify({"error": "Shipment not found for this organization."}), 404
+    proof = db.table("delivery_proofs").insert({
+        "organization_id": org,
+        "shipment_id": shipment_id,
+        "recipient_name": recipient,
+        "signature_url": signature,
+        "photo_url": photo,
+    }).execute().data[0]
+    db.table("shipments").update({"status": "delivered"}).eq("id", shipment_id).eq("organization_id", org).execute()
+    if task:
+        db.table("delivery_tasks").update({"status": "delivered"}).eq("id", task_id).eq("organization_id", org).execute()
+    order_id = (task or shipment[0]).get("order_id")
+    if order_id:
+        db.table("orders").update({"status": "delivered"}).eq("id", order_id).eq("organization_id", org).execute()
+    return jsonify({"proof": proof, "message": "Proof recorded and linked delivery marked delivered."}), 201
+
+
+@operations_bp.post("/fleet-vehicles")
+@login_required
+def create_fleet_vehicle():
+    payload = request.get_json(silent=True) or {}
+    reference = str(payload.get("vehicle_reference") or "").strip()
+    driver = str(payload.get("driver_name") or "").strip() or None
+    dock = str(payload.get("dock_label") or "").strip() or None
+    try:
+        capacity = float(payload.get("capacity_kg"))
+        compartments = int(payload.get("compartment_count"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Enter a valid vehicle capacity and compartment count."}), 400
+    if not reference or len(reference) > 80 or not math.isfinite(capacity) or capacity <= 0 or compartments < 1 or compartments > 60:
+        return jsonify({"error": "A vehicle reference, positive capacity, and 1–60 compartments are required."}), 400
+    vehicle = get_client().table("fleet_vehicles").insert({
+        "organization_id": g.current_user["org"], "vehicle_reference": reference,
+        "driver_name": driver, "capacity_kg": capacity, "compartment_count": compartments,
+        "dock_label": dock,
+    }).execute().data[0]
+    return jsonify({"vehicle": vehicle}), 201
+
+
+@operations_bp.post("/fleet-vehicles/<vehicle_id>/loads")
+@login_required
+def assign_shipment_to_vehicle(vehicle_id):
+    payload = request.get_json(silent=True) or {}
+    org = g.current_user["org"]
+    shipment_id = payload.get("shipment_id")
+    slot_code = str(payload.get("slot_code") or "").strip().upper()
+    try:
+        weight = float(payload.get("weight_kg"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Enter the cargo weight in kilograms."}), 400
+    db = get_client()
+    vehicle_rows = db.table("fleet_vehicles").select("*").eq("id", vehicle_id).eq("organization_id", org).limit(1).execute().data
+    if not vehicle_rows:
+        return jsonify({"error": "Vehicle not found."}), 404
+    vehicle = vehicle_rows[0]
+    if vehicle.get("status") not in {"available", "loading"}:
+        return jsonify({"error": "This vehicle is not available for loading."}), 409
+    slot_number = int(slot_code[1:]) if len(slot_code) > 1 and slot_code[0] == "A" and slot_code[1:].isdigit() else 0
+    if not shipment_id:
+        return jsonify({"error": "Select a shipment to assign."}), 400
+    if slot_number < 1 or slot_number > int(vehicle["compartment_count"]):
+        return jsonify({"error": "Choose an available slot on this vehicle."}), 400
+    if not math.isfinite(weight) or weight <= 0:
+        return jsonify({"error": "Cargo weight must be greater than zero."}), 400
+    shipment_rows = db.table("shipments").select("id, status").eq("id", shipment_id).eq("organization_id", org).limit(1).execute().data
+    if not shipment_rows or str(shipment_rows[0].get("status", "")).lower() in {"delivered", "cancelled"}:
+        return jsonify({"error": "Choose an active shipment belonging to this organization."}), 404
+    loads = db.table("fleet_vehicle_loads").select("weight_kg").eq("vehicle_id", vehicle_id).eq("organization_id", org).execute().data
+    if sum(float(load.get("weight_kg") or 0) for load in loads) + weight > float(vehicle["capacity_kg"]):
+        return jsonify({"error": "This load would exceed the vehicle's rated capacity."}), 409
+    try:
+        result = db.table("fleet_vehicle_loads").insert({
+            "organization_id": org, "vehicle_id": vehicle_id, "shipment_id": shipment_id,
+            "slot_code": slot_code, "weight_kg": weight,
+        }).execute()
+    except Exception:
+        log.exception("Could not assign shipment to fleet vehicle")
+        return jsonify({"error": "The slot or shipment is already assigned. Refresh the load plan and try again."}), 409
+    db.table("fleet_vehicles").update({"status": "loading"}).eq("id", vehicle_id).eq("organization_id", org).execute()
+    return jsonify({"load": result.data[0]}), 201
+
+
+@operations_bp.delete("/fleet-loads/<load_id>")
+@login_required
+def remove_fleet_load(load_id):
+    org = g.current_user["org"]
+    db = get_client()
+    existing = db.table("fleet_vehicle_loads").select("vehicle_id").eq("id", load_id).eq("organization_id", org).limit(1).execute().data
+    if not existing:
+        return jsonify({"error": "Load assignment not found."}), 404
+    vehicle_id = existing[0]["vehicle_id"]
+    result = db.table("fleet_vehicle_loads").delete().eq("id", load_id).eq("organization_id", org).execute()
+    if not result.data:
+        return jsonify({"error": "Load assignment not found."}), 404
+    still_loaded = db.table("fleet_vehicle_loads").select("id").eq("vehicle_id", vehicle_id).eq("organization_id", org).limit(1).execute().data
+    if not still_loaded:
+        db.table("fleet_vehicles").update({"status": "available"}).eq("id", vehicle_id).eq("organization_id", org).execute()
+    return jsonify({"message": "Shipment removed from the vehicle load plan."})
 
 
 def _create_order_and_shipment(db, org, data):
