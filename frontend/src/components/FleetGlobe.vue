@@ -3,14 +3,28 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 
-const props = defineProps({ shipments: { type: Array, default: () => [] }, selectedId: { type: String, default: null } })
+const props = defineProps({ shipments: { type: Array, default: () => [] }, selectedId: { type: String, default: null }, simulation: { type: Boolean, default: false } })
 const emit = defineEmits(['select'])
 const container = ref(null)
 const error = ref('')
 let viewer
 const lastPositions = new Map()
 let lastFocusedId = null
-const counts = computed(() => props.shipments.reduce((result, shipment) => {
+const simulationStep = ref(0)
+let simulationTimer
+const demoRoutes = [
+  { id: 'demo-air', reference_number: 'DEMO-AIR-204', mode: 'air', transport_mode: 'plane', status: 'in_transit', start: [18.5037, -77.9134], end: [25.7933, -80.2906], minutes: 18 },
+  { id: 'demo-land', reference_number: 'DEMO-LAND-118', mode: 'road', transport_mode: 'truck', status: 'in_transit', start: [17.9712, -76.7936], end: [18.4762, -77.8939], minutes: 8 },
+  { id: 'demo-sea', reference_number: 'DEMO-SEA-052', mode: 'ocean', transport_mode: 'ship', status: 'in_transit', start: [17.96, -76.8], end: [10.66, -61.51], minutes: 32 },
+]
+const simulatedShipments = computed(() => props.simulation ? demoRoutes.map((route) => {
+  const progress = ((simulationStep.value * 0.012 + (route.id === 'demo-air' ? 0.08 : route.id === 'demo-sea' ? 0.31 : 0.62)) % 1)
+  const latitude = route.start[0] + (route.end[0] - route.start[0]) * progress
+  const longitude = route.start[1] + (route.end[1] - route.start[1]) * progress
+  return { ...route, current_latitude: latitude, current_longitude: longitude, origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${Math.max(1, Math.ceil(route.minutes * (1 - progress)))} min`, route_geometry: { coordinates: [[route.start[1], route.start[0]], [route.end[1], route.end[0]]] } }
+}) : [])
+const displayedShipments = computed(() => [...props.shipments, ...simulatedShipments.value])
+const counts = computed(() => displayedShipments.value.reduce((result, shipment) => {
   const type = typeOf(shipment)
   result[type] += 1
   return result
@@ -69,7 +83,7 @@ function render() {
   if (!viewer || viewer.isDestroyed()) return
   error.value = ''
   viewer.entities.removeAll()
-  props.shipments.filter((shipment) => !['delivered', 'cancelled'].includes(shipment.status)).forEach((shipment) => {
+  displayedShipments.value.filter((shipment) => !['delivered', 'cancelled'].includes(shipment.status)).forEach((shipment) => {
     const point = coordinates(shipment)
     if (!point) return
     const type = typeOf(shipment)
@@ -95,11 +109,11 @@ function render() {
       id: String(shipment.id), name: shipment.reference_number || 'Shipment', position,
       orientation: type === 'plane' ? new Cesium.CallbackProperty(() => Cesium.Transforms.headingPitchRollQuaternion(Cesium.Cartesian3.fromDegrees(...point), new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(heading), 0, 0)), false) : undefined,
       billboard: { image: markerSvg(type), width: 24, height: 24, color, rotation: new Cesium.CallbackProperty(() => -Cesium.Math.toRadians(heading), false), alignedAxis: Cesium.Cartesian3.UNIT_Z, heightReference: type === 'truck' || type === 'ship' ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE },
-      label: { text: `${iconFor(type)}  ${shipment.reference_number || 'Shipment'}`, font: '12px sans-serif', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -18), distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3500000) },
+      label: { text: `${iconFor(type)}  ${shipment.reference_number || 'Shipment'}${shipment.etaLabel ? ` · ETA ${shipment.etaLabel}` : ''}`, font: '12px sans-serif', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -18), distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3500000) },
       properties: { shipmentId: shipment.id, type, heading },
     })
   })
-  const selected = props.shipments.find((shipment) => shipment.id === props.selectedId)
+  const selected = displayedShipments.value.find((shipment) => shipment.id === props.selectedId)
   const point = selected && coordinates(selected)
   if (point && selected.id !== lastFocusedId) {
     viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(...point, 1800000), duration: .6 })
@@ -114,7 +128,7 @@ function focusAll() {
 function onClick(event) {
   const picked = viewer?.scene.pick(event.position)
   const id = picked?.id?.properties?.shipmentId?.getValue()
-  const shipment = props.shipments.find((entry) => String(entry.id) === String(id))
+  const shipment = displayedShipments.value.find((entry) => String(entry.id) === String(id))
   if (shipment) emit('select', shipment)
 }
 onMounted(() => {
@@ -136,17 +150,23 @@ onMounted(() => {
   } catch (cause) { error.value = cause.message || 'The 3D map could not be initialized.' }
 })
 watch(() => [props.shipments, props.selectedId], render, { deep: true })
-onBeforeUnmount(() => { if (viewer && !viewer.isDestroyed()) viewer.destroy() })
+watch(() => props.simulation, (enabled) => {
+  if (enabled) simulationTimer = window.setInterval(() => { simulationStep.value += 1; render() }, 1000)
+  else window.clearInterval(simulationTimer)
+  render()
+}, { immediate: true })
+onBeforeUnmount(() => { window.clearInterval(simulationTimer); if (viewer && !viewer.isDestroyed()) viewer.destroy() })
 </script>
 
 <template>
   <section class="panel globe-panel">
     <header class="globe-head"><div><span class="mono dim">GOD’S EYE VIEW</span><h2>3D shipment tracking</h2></div><div class="legend"><span>✈ {{ counts.plane }} air</span><span>◆ {{ counts.ship }} sea</span><span>● {{ counts.truck }} road</span><button type="button" @click="focusAll">Fit all</button></div></header>
-    <div class="globe-wrap"><div ref="container" class="globe"></div><p v-if="error" class="globe-error">{{ error }}</p><p v-else-if="!shipments.some((shipment) => coordinates(shipment))" class="globe-empty">Shipment positions appear here when your tracking providers send coordinates.</p></div>
-    <p class="globe-note">Positions and headings use shipment telemetry. Configure aviation, AIS, and road GPS feeds to track each transport type live.</p>
+    <div class="globe-wrap"><div ref="container" class="globe"></div><p v-if="error" class="globe-error">{{ error }}</p><p v-else-if="!displayedShipments.some((shipment) => coordinates(shipment))" class="globe-empty">Shipment positions appear here when your tracking providers send coordinates.</p></div>
+    <p v-if="simulation" class="globe-note sim-note">● DEMO SIMULATION · air, land, and sea positions and ETAs update every second.</p><p v-else class="globe-note">Positions and headings use shipment telemetry. Configure aviation, AIS, and road GPS feeds to track each transport type live.</p>
   </section>
 </template>
 
 <style scoped>
 .globe-panel{padding:1rem;margin:1rem 0}.globe-head{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem;flex-wrap:wrap}.globe-head .mono{font-size:.65rem;letter-spacing:.08em}.globe-head h2{font-size:1rem;margin-top:.2rem}.legend{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}.legend span{font-size:.68rem;color:var(--text-dim);padding:.25rem .45rem;border:1px solid var(--line);border-radius:99px}.legend button{padding:.3rem .55rem;font-size:.7rem}.globe-wrap{position:relative;margin-top:.8rem;overflow:hidden;border:1px solid var(--line);border-radius:8px}.globe{height:440px;background:#07182b}.globe-empty,.globe-error{position:absolute;inset:auto 1rem 1rem;margin:0;padding:.65rem .8rem;border-radius:8px;background:color-mix(in srgb,var(--panel) 90%,transparent);text-align:center;font-size:.78rem;color:var(--text-dim);pointer-events:none}.globe-note{margin:.55rem 0 0;color:var(--text-dim);font-size:.7rem;line-height:1.4}:deep(.cesium-viewer-bottom){font-size:10px}:deep(.cesium-widget-credits){background:rgba(5,15,24,.65)}@media(max-width:650px){.globe{height:320px}.globe-head{align-items:flex-start}.legend{gap:.3rem}.legend span{font-size:.62rem}}
+.sim-note{color:var(--risk-low)}
 </style>

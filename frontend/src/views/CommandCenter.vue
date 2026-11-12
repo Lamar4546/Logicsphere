@@ -65,7 +65,6 @@ function focusShipment(shipment) {
 }
 function toggleFleetSimulation() {
   fleetSimulation.value = !fleetSimulation.value
-  if (fleetSimulation.value) fleetMode.value = '2d'
 }
 async function handleTrackShipment(shipment) {
   selectedShipment.value = shipment
@@ -270,7 +269,7 @@ onBeforeUnmount(() => {
       <TodayStrip v-if="activeTab==='tracking'" :today="summary.today" :shipments="shipments" />
       <section v-if="activeTab==='tracking'" ref="fleetSection" id="gods-eye-view" class="fleet-view"><div class="fleet-switch"><span class="fleet-title"><small>LIVE FLEET DISTRIBUTION</small><strong>Jamaica & Caribbean Fleet Overview</strong></span><div><button :class="{active:fleetMode==='3d'}" @click="fleetMode='3d'">3D globe</button><button :class="{active:fleetMode==='2d'}" @click="fleetMode='2d'">2D map</button><button :class="{active:fleetSimulation}" @click="toggleFleetSimulation">{{ fleetSimulation ? '■ Stop demo' : '▶ Run demo' }}</button></div></div>
         <div class="fleet-dashboard">
-          <div class="fleet-map-column"><FleetGlobe v-if="fleetMode==='3d'" :shipments="shipments" :selected-id="selectedShipment?.id" @select="focusShipment" />
+          <div class="fleet-map-column"><FleetGlobe v-if="fleetMode==='3d'" :shipments="shipments" :selected-id="selectedShipment?.id" :simulation="fleetSimulation" @select="focusShipment" />
             <FleetOverviewMap v-else :shipments="shipments" :selected-id="selectedShipment?.id" :simulation="fleetSimulation" @select="focusShipment" /></div>
           <aside class="activity-panel panel"><h3>Recent shipment activity</h3><article v-for="shipment in recentActivity" :key="shipment.id"><span class="activity-icon">↗</span><div><strong>{{ shipment.reference_number || 'Shipment update' }}</strong><p>{{ shipment.last_event_description }}</p><small>{{ shipment.tracking_updated_at ? new Date(shipment.tracking_updated_at).toLocaleString() : shipment.status }}</small></div></article><p v-if="!recentActivity.length" class="activity-empty">Shipment events will appear here when carriers or dispatchers report updates.</p></aside>
         </div>
