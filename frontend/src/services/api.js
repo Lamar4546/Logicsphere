@@ -164,6 +164,15 @@ export async function refreshShipmentRoute(shipmentId) {
 export async function updateShipmentTracking(shipmentId, telemetry) {
   return request(`/shipments/${shipmentId}/tracking`, { method: 'POST', body: JSON.stringify(telemetry) })
 }
+export async function updateShipmentLiveTracking(shipmentId, payload) {
+  return request(`/shipments/${shipmentId}/live-tracking`, { method: 'PATCH', body: JSON.stringify(payload) })
+}
+export async function createPackageTracking(payload) {
+  return request('/shipments/package-tracking', { method: 'POST', body: JSON.stringify(payload) })
+}
+export async function refreshPackageTracking(shipmentId) {
+  return request(`/shipments/${shipmentId}/package-tracking/refresh`, { method: 'POST', body: JSON.stringify({}) })
+}
 export async function createPublicTrackingLink(shipmentId) {
   return request(`/shipments/${shipmentId}/public-tracking-link`, { method: 'POST', body: JSON.stringify({}) })
 }
@@ -297,6 +306,8 @@ export const api = {
   evaluateShipment,
   refreshShipmentRoute,
   updateShipmentTracking,
+  createPackageTracking,
+  refreshPackageTracking,
   createPublicTrackingLink,
 
   approveRecommendation,

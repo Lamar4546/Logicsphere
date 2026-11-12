@@ -5,173 +5,177 @@ import 'leaflet/dist/leaflet.css'
 import { getPublicTracking } from '../services/api.js'
 import PageSkeleton from '../components/PageSkeleton.vue'
 
-// URL shape: /track/<token>
 const token = decodeURIComponent(window.location.pathname.split('/')[2] || '')
-
 const data = ref(null)
 const error = ref('')
 const loading = ref(true)
 const mapElement = ref(null)
-let map, routeLine, marker, timer
+let map, routeLine, marker, destinationMarker, timer, fitted = false
 
 const hasValue = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
-const status = computed(() => data.value?.status)
+const status = computed(() => data.value?.status || 'planned')
 const isDone = computed(() => ['delivered', 'cancelled'].includes(status.value))
-const delayed = computed(() => ['delayed', 'at_risk'].includes(status.value))
+const delayed = computed(() => ['delayed', 'at_risk', 'exception'].includes(status.value))
 const hasPosition = computed(() => hasValue(data.value?.current_latitude) && hasValue(data.value?.current_longitude))
 const route = computed(() => {
   const coords = data.value?.route_geometry?.coordinates
-  return Array.isArray(coords) && coords.length > 1 ? coords.map(([lng, lat]) => [lat, lng]) : []
+  if (Array.isArray(coords) && coords.length > 1) return coords.map(([lng, lat]) => [lat, lng])
+  if (hasPosition.value && hasValue(data.value?.destination_latitude) && hasValue(data.value?.destination_longitude)) {
+    return [[Number(data.value.current_latitude), Number(data.value.current_longitude)], [Number(data.value.destination_latitude), Number(data.value.destination_longitude)]]
+  }
+  return []
 })
-const hasMap = computed(() => hasPosition.value || route.value.length > 1)
+const hasDestination = computed(() => hasValue(data.value?.destination_latitude) && hasValue(data.value?.destination_longitude))
+const hasMap = computed(() => hasPosition.value || hasDestination.value || route.value.length > 1)
+const events = computed(() => (Array.isArray(data.value?.tracking_events) ? data.value.tracking_events : [])
+  .filter((event) => event?.description || event?.location)
+  .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0)))
 
-const etaText = computed(() => {
-  const value = data.value?.eta_current
+function formatDate(value, options = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) {
   if (!value) return ''
-  const date = new Date(value)
-  const sameDay = date.toDateString() === new Date().toDateString()
-  return sameDay
-    ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    : date.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })
-})
+  const dateOnly = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  const date = dateOnly ? new Date(`${value}T12:00:00`) : new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString([], options)
+}
 
+const etaValue = computed(() => data.value?.ai_eta_at || data.value?.carrier_eta_at || data.value?.ai_eta_date || data.value?.carrier_eta_date || data.value?.eta_current)
+const etaText = computed(() => formatDate(etaValue.value, etaValue.value?.length === 10
+  ? { weekday: 'long', month: 'long', day: 'numeric' }
+  : { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))
 const headline = computed(() => {
-  if (status.value === 'delivered') return 'Delivered'
+  if (status.value === 'delivered') return 'Your package has been delivered'
   if (status.value === 'cancelled') return 'This shipment was cancelled'
-  if (status.value === 'delayed') return etaText.value ? `Delayed, now expected by ${etaText.value}` : 'Your delivery is delayed'
-  if (status.value === 'at_risk') return 'Your delivery may be delayed'
-  return etaText.value ? `On the way, arriving by ${etaText.value}` : 'On the way'
+  if (status.value === 'delayed') return 'Your delivery is running late'
+  if (status.value === 'at_risk' || status.value === 'exception') return 'There’s an update on your delivery'
+  if (status.value === 'in_transit') return 'Your package is on the way'
+  return 'Tracking is getting started'
 })
-
-const steps = computed(() => {
-  const s = status.value
-  const moving = ['in_transit', 'at_risk', 'delayed', 'delivered'].includes(s)
-  return [
-    { label: 'Delivered', detail: s === 'delivered' ? 'Package delivered' : etaText.value ? `Expected ${etaText.value}` : 'Awaiting delivery', state: s === 'delivered' ? 'done' : 'upcoming' },
-    { label: 'In transit', detail: data.value?.last_event_description || 'On its way to you', state: s === 'delivered' ? 'done' : moving ? 'current' : 'upcoming' },
-    { label: 'Order placed', detail: 'We received your order', state: 'done' },
-  ]
+const displayStatus = computed(() => {
+  const provider = data.value?.tracking_status
+  return provider ? String(provider).replace(/([a-z])([A-Z])/g, '$1 $2') : String(status.value).replaceAll('_', ' ')
 })
+const etaSource = computed(() => {
+  if (data.value?.ai_eta_source === 'aftership_ai') return 'AI delivery estimate'
+  if (data.value?.ai_eta_source === '17track_estimate') return 'Tracking service estimate'
+  if (data.value?.carrier_eta_at || data.value?.carrier_eta_date) return 'Carrier estimate'
+  return 'Estimated arrival'
+})
+const modeLabel = computed(() => ({ truck: 'Land', ship: 'Sea', plane: 'Air' }[data.value?.transport_mode] || ({ road: 'Land', ocean: 'Sea', air: 'Air' }[data.value?.mode] || 'Shipment')))
+const liveSourceLabel = computed(() => ({ traccar: 'Traccar GPS', aisstream: 'AIS vessel feed', opensky: 'OpenSky aircraft feed' }[data.value?.live_tracking_provider] || 'Carrier tracking'))
 
 function stop() { window.clearInterval(timer); timer = null }
-
 async function load() {
   try {
     data.value = await getPublicTracking(token)
     error.value = ''
     if (isDone.value) stop()
   } catch (err) {
-    // keep showing the last good data if a refresh fails
     if (!data.value) { error.value = err.message; stop() }
-  } finally {
-    loading.value = false
-  }
-}
-
-function colors() {
-  const css = getComputedStyle(mapElement.value)
-  const get = (name, fallback) => css.getPropertyValue(name).trim() || fallback
-  return { signal: get('--signal', '#277fc8'), low: get('--risk-low', '#279a6d'), high: get('--risk-high', '#d87535') }
+  } finally { loading.value = false }
 }
 
 function renderMap() {
   if (!mapElement.value || !hasMap.value) return
-  const c = colors()
   if (!map) {
-    map = L.map(mapElement.value, { zoomControl: false, attributionControl: true })
+    map = L.map(mapElement.value, { zoomControl: true, attributionControl: true })
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(map)
   }
-  routeLine?.remove()
-  marker?.remove()
+  routeLine?.remove(); marker?.remove(); destinationMarker?.remove()
   const bounds = []
   if (route.value.length > 1) {
-    routeLine = L.polyline(route.value, { color: c.signal, weight: 4, opacity: .85 }).addTo(map)
+    routeLine = L.polyline(route.value, { color: '#297bc1', weight: 4, opacity: .7 }).addTo(map)
     bounds.push(...route.value)
   }
   if (hasPosition.value) {
     const here = [Number(data.value.current_latitude), Number(data.value.current_longitude)]
-    marker = L.circleMarker(here, { radius: 9, color: '#fff', weight: 3, fillColor: delayed.value ? c.high : c.signal, fillOpacity: 1 }).addTo(map)
+    marker = L.circleMarker(here, { radius: 9, color: '#fff', weight: 3, fillColor: delayed.value ? '#d87535' : '#277fc8', fillOpacity: 1 }).addTo(map)
+    marker.bindTooltip('Latest reported location')
     bounds.push(here)
   }
-  nextTick(() => { map.invalidateSize(); if (bounds.length) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 }) })
+  if (hasDestination.value) {
+    const destination = [Number(data.value.destination_latitude), Number(data.value.destination_longitude)]
+    destinationMarker = L.circleMarker(destination, { radius: 7, color: '#fff', weight: 2, fillColor: '#279a6d', fillOpacity: 1 }).addTo(map)
+    destinationMarker.bindTooltip('Destination')
+    bounds.push(destination)
+  }
+  nextTick(() => {
+    map.invalidateSize()
+    if (bounds.length && !fitted) { map.fitBounds(bounds, { padding: [28, 28], maxZoom: 12 }); fitted = true }
+  })
 }
-
 watch(data, () => nextTick(renderMap))
-
 onMounted(async () => {
-  document.title = 'Track your shipment · LogiSphere'
+  document.title = 'Track your package · LogiSphere'
   await load()
-  if (!error.value && !isDone.value) timer = window.setInterval(load, 15000)
+  if (!error.value && !isDone.value) timer = window.setInterval(load, 30000)
 })
 onBeforeUnmount(() => { stop(); map?.remove() })
 </script>
 
 <template>
   <main class="track">
-    <header class="top"><strong class="display">LogiSphere</strong><span class="mono dim">SHIPMENT TRACKING</span></header>
-
+    <header class="top"><strong class="display">LogiSphere</strong><span class="mono dim">PACKAGE TRACKING</span></header>
     <PageSkeleton v-if="loading" variant="tracking" />
-
     <section v-else-if="error" class="panel state">
-      <h1>We couldn't open this link</h1>
-      <p class="dim">{{ error }}</p>
+      <h1>We couldn’t open this tracking link</h1><p class="dim">{{ error }}</p>
       <button type="button" @click="loading = true; error = ''; load()">Try again</button>
     </section>
-
     <template v-else-if="data">
-      <span class="mono eyebrow">SHIPMENT STATUS</span>
-      <h1>{{ headline }}</h1>
+      <div class="intro">
+        <span class="mono eyebrow">SHIPMENT {{ data.reference_number }}</span>
+        <h1>{{ headline }}</h1>
+        <p class="dim">{{ data.last_event_description || 'We’ll show new carrier updates here as they arrive.' }}</p>
+      </div>
 
-      <section class="panel mapcard" v-show="hasMap">
-        <div ref="mapElement" class="map" aria-label="Map showing your shipment"></div>
-        <div class="meta" v-if="data.driver_first_name || data.vehicle_label">
-          <div v-if="data.driver_first_name"><span class="mono dim">DRIVER</span><strong>{{ data.driver_first_name }}</strong></div>
-          <div v-if="data.vehicle_label"><span class="mono dim">VEHICLE</span><strong>{{ data.vehicle_label }}</strong></div>
-        </div>
+      <section class="summary panel">
+        <div class="summary-status"><span class="pulse" :class="{ orange: delayed, green: isDone }"></span><div><span class="mono dim">CURRENT STATUS</span><strong>{{ displayStatus }}</strong></div></div>
+        <div v-if="etaText" class="eta"><span class="mono dim">{{ etaSource }}</span><strong>{{ etaText }}</strong></div>
+        <div v-if="data.tracking_carrier" class="carrier"><span class="mono dim">CARRIER</span><strong>{{ data.tracking_carrier }}</strong></div>
+        <div class="carrier"><span class="mono dim">DELIVERY MODE</span><strong>{{ modeLabel }}</strong></div>
       </section>
-      <p v-if="!hasMap" class="panel nomap dim">Live location will appear here once the carrier shares it.</p>
 
-      <h2 class="mono dim hist">TRACKING HISTORY</h2>
-      <ol class="steps">
-        <li v-for="s in steps" :key="s.label" :class="s.state">
-          <span class="node">{{ s.state === 'done' ? '✓' : '' }}</span>
-          <strong>{{ s.label }}</strong><small class="dim">{{ s.detail }}</small>
-        </li>
-      </ol>
+      <section v-if="hasMap" class="panel mapcard">
+        <div ref="mapElement" class="map" role="img" aria-label="Map showing the package route and latest reported position"></div>
+        <p class="map-note" v-if="data.live_tracking_updated_at">Position from {{ liveSourceLabel }} · updated {{ formatDate(data.live_tracking_updated_at) }}. A straight line to the destination is approximate.</p>
+        <p class="map-note" v-else>Carrier scans can be delayed. The marker shows the latest reported carrier location; a straight line to the destination is approximate.</p>
+      </section>
+      <section v-else class="panel nomap"><strong>Map location not available yet</strong><p class="dim">Carriers usually share a location after the first package scan. Check back as tracking updates arrive.</p></section>
 
-      <aside v-if="data.notice" class="notice">
-        <strong>{{ delayed ? 'Delivery update' : 'Update' }}</strong>
-        <p>{{ data.notice }}</p>
-      </aside>
-
-      <footer class="mono dim">Shipment ID: {{ data.reference_number }}</footer>
+      <section class="history">
+        <div class="section-head"><h2 class="mono">DELIVERY UPDATES</h2><span class="mono dim" v-if="data.carrier_tracking_updated_at">Carrier data updated {{ formatDate(data.carrier_tracking_updated_at, { hour: 'numeric', minute: '2-digit' }) }}</span></div>
+        <ol v-if="events.length" class="events">
+          <li v-for="(event, index) in events" :key="`${event.time}-${index}`" :class="{ latest: index === 0 }">
+            <span class="event-dot"></span><div class="event-copy"><strong>{{ event.description || event.status || 'Shipment update' }}</strong>
+              <span v-if="event.location" class="dim">{{ event.location }}</span>
+              <time class="mono dim">{{ formatDate(event.time) || 'Time unavailable' }}</time>
+            </div>
+          </li>
+        </ol>
+        <p v-else class="panel no-events dim">Carrier scans will appear here when they become available.</p>
+      </section>
+      <footer class="mono dim">Shared tracking · {{ data.reference_number }}</footer>
     </template>
   </main>
 </template>
 
 <style scoped>
-.track { max-width: 440px; margin: 0 auto; padding: 1.25rem 1.25rem 2.5rem; min-height: 100dvh; }
-.top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--line); }
+.track { max-width: 760px; margin: 0 auto; padding: 1.25rem 1.25rem 3rem; min-height: 100dvh; }
+.top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1rem; margin-bottom: 1.7rem; border-bottom: 1px solid var(--line); }
 .top .mono { font-size: .65rem; letter-spacing: .08em; }
-.eyebrow { color: var(--signal); font-size: .68rem; letter-spacing: .08em; }
-h1 { font-size: 1.6rem; line-height: 1.2; margin: .4rem 0 1.1rem; }
-.mapcard { overflow: hidden; padding: 0; }
-.map { height: 210px; background: var(--panel-2); }
-.meta { display: flex; justify-content: space-between; padding: .9rem 1rem; }
-.meta span { display: block; font-size: .62rem; margin-bottom: .15rem; }
-.nomap { padding: 1rem; font-size: .85rem; }
-.hist { font-size: .68rem; letter-spacing: .08em; margin: 1.6rem 0 .9rem; }
-.steps { list-style: none; margin: 0; padding: 0; }
-.steps li { position: relative; display: grid; padding: 0 0 1.4rem 2.2rem; }
-.steps li::before { content: ''; position: absolute; left: .7rem; top: 1.5rem; bottom: 0; width: 2px; background: var(--line); }
-.steps li:last-child { padding-bottom: 0; } .steps li:last-child::before { display: none; }
-.steps small { font-size: .78rem; margin-top: .1rem; }
-.node { position: absolute; left: 0; top: 0; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 2px solid var(--line); background: var(--panel); display: grid; place-items: center; font-size: .75rem; color: #fff; }
-.done .node { background: var(--signal); border-color: var(--signal); }
-.current .node { border-color: var(--signal); box-shadow: inset 0 0 0 4px var(--panel), inset 0 0 0 12px var(--signal); }
-.upcoming strong, .upcoming small { opacity: .55; }
-.notice { margin-top: 1.4rem; padding: .9rem 1rem; border-radius: 12px; background: color-mix(in srgb, var(--signal) 12%, transparent); }
-.notice p { margin: .4rem 0 0; font-size: .85rem; line-height: 1.5; color: var(--text-dim); }
-footer { text-align: center; font-size: .68rem; margin-top: 2rem; }
-.state { padding: 1.25rem; } .state h1 { font-size: 1.15rem; margin: 0 0 .5rem; } .state button { margin-top: .75rem; }
+.intro { margin-bottom: 1.2rem; }.eyebrow { color: var(--signal); font-size: .67rem; letter-spacing: .08em; }
+h1 { font-size: clamp(1.45rem, 5vw, 2rem); line-height: 1.2; margin: .45rem 0 .4rem; }
+.intro p { margin: 0; font-size: .9rem; line-height: 1.5; }
+.summary { display: flex; flex-wrap: wrap; gap: 1.1rem 2rem; align-items: center; padding: 1rem 1.15rem; margin-bottom: 1rem; }
+.summary-status { display: flex; align-items: center; gap: .7rem; flex: 1 1 180px; }.summary-status div, .eta, .carrier { display: grid; gap: .2rem; }
+.summary .mono { font-size: .61rem; letter-spacing: .07em; }.summary strong { font-size: .92rem; text-transform: capitalize; }
+.pulse { width: .65rem; height: .65rem; border-radius: 50%; background: var(--signal); box-shadow: 0 0 0 5px color-mix(in srgb, var(--signal) 13%, transparent); }
+.pulse.orange { background: var(--risk-high); box-shadow: 0 0 0 5px color-mix(in srgb, var(--risk-high) 13%, transparent); }.pulse.green { background: var(--risk-low); box-shadow: 0 0 0 5px color-mix(in srgb, var(--risk-low) 13%, transparent); }
+.mapcard { overflow: hidden; padding: 0; margin-bottom: 1.5rem; }.map { height: min(46vh, 360px); min-height: 250px; background: var(--panel-2); }.map-note { margin: 0; padding: .7rem 1rem; color: var(--text-dim); font-size: .72rem; }
+.nomap { padding: 1.2rem; margin-bottom: 1.5rem; }.nomap p { font-size: .82rem; line-height: 1.5; margin: .35rem 0 0; }
+.section-head { display: flex; justify-content: space-between; gap: .8rem; align-items: center; margin: 1.5rem 0 .9rem; }.section-head h2 { margin: 0; font-size: .67rem; letter-spacing: .08em; }.section-head span { font-size: .63rem; }
+.events { list-style: none; margin: 0; padding: 0; }.events li { position: relative; display: flex; gap: .85rem; padding-bottom: 1.15rem; }.events li:not(:last-child)::before { content: ''; position: absolute; left: .31rem; top: .8rem; bottom: 0; width: 1px; background: var(--line); }
+.event-dot { z-index: 1; flex: 0 0 .65rem; height: .65rem; margin-top: .2rem; border-radius: 50%; border: 2px solid var(--line); background: var(--panel); }.latest .event-dot { border-color: var(--signal); background: var(--signal); }
+.event-copy { display: grid; gap: .2rem; font-size: .86rem; }.event-copy .dim { font-size: .76rem; }.event-copy time { font-size: .64rem; margin-top: .1rem; }
+.no-events { padding: 1rem; font-size: .8rem; }footer { text-align: center; font-size: .65rem; margin-top: 2rem; }.state { padding: 1.25rem; }.state h1 { font-size: 1.2rem; }.state button { margin-top: .75rem; }
+@media (max-width: 540px) { .track { padding: 1rem 1rem 2rem; }.summary { gap: .9rem; }.carrier { flex-basis: 100%; }.section-head { align-items: flex-start; flex-direction: column; gap: .3rem; } }
 </style>

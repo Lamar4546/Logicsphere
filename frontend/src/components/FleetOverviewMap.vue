@@ -6,11 +6,20 @@ import 'leaflet/dist/leaflet.css'
 const props = defineProps({
   shipments: { type: Array, default: () => [] },
   selectedId: { type: String, default: null },
+  simulation: { type: Boolean, default: false },
 })
 const emit = defineEmits(['select'])
 
 const mapElement = ref(null)
+const simulationStep = ref(0)
 let map, layer, hasFitted = false
+let simulationTimer
+
+const demoRoutes = [
+  { id: 'demo-air', reference_number: 'DEMO-AIR-204', mode: 'air', status: 'in_transit', start: [18.5037, -77.9134], end: [25.7933, -80.2906], minutes: 18 },
+  { id: 'demo-land', reference_number: 'DEMO-LAND-118', mode: 'road', status: 'in_transit', start: [17.9712, -76.7936], end: [18.4762, -77.8939], minutes: 8 },
+  { id: 'demo-sea', reference_number: 'DEMO-SEA-052', mode: 'ocean', status: 'in_transit', start: [17.96, -76.8], end: [10.66, -61.51], minutes: 32 },
+]
 
 const hasValue = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
 const point = (lat, lng) => (hasValue(lat) && hasValue(lng) ? [Number(lat), Number(lng)] : null)
@@ -29,7 +38,12 @@ function geometry(s) {
   return { live, road, line, origin, destination, anchor: live || origin || (road && road[0]) || null }
 }
 
-const items = computed(() => props.shipments.filter(isActive).map((s) => ({ s, g: geometry(s) })))
+const simulatedShipments = computed(() => props.simulation ? demoRoutes.map((route) => {
+  const progress = ((simulationStep.value * 0.012 + (route.id === 'demo-air' ? 0.08 : route.id === 'demo-sea' ? 0.31 : 0.62)) % 1)
+  const live = [route.start[0] + (route.end[0] - route.start[0]) * progress, route.start[1] + (route.end[1] - route.start[1]) * progress]
+  return { ...route, current_latitude: live[0], current_longitude: live[1], origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${Math.max(1, Math.ceil(route.minutes * (1 - progress)))} min`, progress }
+}) : [])
+const items = computed(() => [...props.shipments.filter(isActive), ...simulatedShipments.value].map((s) => ({ s, g: geometry(s) })))
 const plotted = computed(() => items.value.filter((i) => i.g.anchor))
 const unplotted = computed(() => items.value.length - plotted.value.length)
 const counts = computed(() => ({
@@ -104,7 +118,7 @@ function render() {
       fillColor: color,
       fillOpacity: planned ? 0.25 : 1,
     })
-      .bindTooltip(`${s.reference_number} · ${s.status}${planned ? ' · no live position yet' : ''}`)
+      .bindTooltip(`${s.reference_number} · ${s.mode ? String(s.mode).toUpperCase() : s.status}${s.etaLabel ? ` · ETA ${s.etaLabel}` : s.tracking_number && g.live ? ' · latest carrier scan' : planned ? ' · no live position yet' : ' · live GPS'}`)
       .on('click', () => emit('select', s))
       .addTo(layer)
   })
@@ -116,7 +130,12 @@ function render() {
 
 onMounted(render)
 watch(() => [props.shipments, props.selectedId], render)
-onBeforeUnmount(() => map?.remove())
+watch(() => props.simulation, (enabled) => {
+  if (enabled) simulationTimer = window.setInterval(() => { simulationStep.value += 1; render() }, 1000)
+  else window.clearInterval(simulationTimer)
+  render()
+}, { immediate: true })
+onBeforeUnmount(() => { window.clearInterval(simulationTimer); map?.remove() })
 </script>
 
 <template>
@@ -141,7 +160,8 @@ onBeforeUnmount(() => map?.remove())
       {{ unplotted }} active shipment{{ unplotted === 1 ? ' has' : 's have' }} no location or route yet and
       {{ unplotted === 1 ? 'is' : 'are' }} not shown.
     </p>
-    <p v-if="plotted.length" class="note dim">Solid dot: live position. Hollow dot: planned start. Dashed line: direct line, no road route.</p>
+    <p v-if="simulation" class="note sim-note"><span class="pulse"></span> DEMO SIMULATION · air, land, and sea positions update every second · ETAs are simulated</p>
+    <p v-else-if="plotted.length" class="note dim">Solid dot: latest reported position; carrier scan pins may be approximate. Hollow dot: planned start. Dashed line: direct line, no road route.</p>
   </section>
 </template>
 
@@ -162,5 +182,8 @@ onBeforeUnmount(() => map?.remove())
   background: color-mix(in srgb, var(--panel) 82%, transparent); color: var(--text); pointer-events: none; }
 .empty span { color: var(--text-dim); font-size: .8rem; }
 .note { margin: .6rem 0 0; font-size: .72rem; }
+.sim-note { color: var(--risk-low); font: .67rem var(--font-mono); letter-spacing: .03em; }
+.pulse { display: inline-block; width: .48rem; height: .48rem; margin-right: .3rem; border-radius: 50%; background: currentColor; animation: sim-pulse 1s infinite; }
+@keyframes sim-pulse { 50% { opacity: .25; transform: scale(.72); } }
 @media (max-width: 600px) { .map { height: 260px; } }
 </style>

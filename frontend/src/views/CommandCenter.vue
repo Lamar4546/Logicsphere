@@ -4,6 +4,8 @@ import { api } from '../services/api.js'
 import TodayStrip from '../components/TodayStrip.vue'
 import ShipmentIntakeForm from '../components/ShipmentIntakeForm.vue'
 import ShipmentList from '../components/ShipmentList.vue'
+import ShipmentMap from '../components/ShipmentMap.vue'
+import PackageTrackingForm from '../components/PackageTrackingForm.vue'
 import RecommendationCard from '../components/RecommendationCard.vue'
 import CommunicationCard from '../components/CommunicationCard.vue'
 import FleetOverviewMap from '../components/FleetOverviewMap.vue'
@@ -19,7 +21,7 @@ const shipments = ref([])
 const visibleShipments = computed(() => {
   const query = props.searchQuery.trim().toLocaleLowerCase()
   if (!query) return shipments.value
-  return shipments.value.filter((shipment) => [shipment.reference_number, shipment.origin, shipment.destination, shipment.carrier, shipment.transport_mode, shipment.driver_name, shipment.driver_reference, shipment.vehicle_id, shipment.current_location_name].some((value) => String(value || '').toLocaleLowerCase().includes(query)))
+  return shipments.value.filter((shipment) => [shipment.reference_number, shipment.tracking_number, shipment.origin, shipment.destination, shipment.carrier, shipment.carrier_name, shipment.tracking_carrier, shipment.transport_mode, shipment.driver_name, shipment.driver_reference, shipment.vehicle_id, shipment.current_location_name].some((value) => String(value || '').toLocaleLowerCase().includes(query)))
 })
 const recentActivity = computed(() => [...shipments.value]
   .filter((shipment) => shipment.last_event_description)
@@ -38,12 +40,14 @@ const summary = reactive({
 const workflowByRecommendation = ref({})
 const activeTab = ref(props.initialTab)
 const fleetMode = ref('3d')
+const fleetSimulation = ref(false)
 const selectedShipment = ref(null)
 const fleetSection = ref(null)
 const evaluatingId = ref(null)
 const refreshedAt = ref(null)
 const publicTrackingUrl = ref('')
 const creatingTrackingLink = ref(false)
+const refreshingPackageId = ref(null)
 let refreshTimer
 
 // guards against async work (in-flight fetches, interval ticks) resolving
@@ -58,6 +62,10 @@ watch(() => props.initialTab, (tab) => { activeTab.value = tab })
 // Picking a shipment anywhere (fleet map, attention list) jumps to its tracking view
 function focusShipment(shipment) {
   selectedShipment.value = shipment
+}
+function toggleFleetSimulation() {
+  fleetSimulation.value = !fleetSimulation.value
+  if (fleetSimulation.value) fleetMode.value = '2d'
 }
 async function handleTrackShipment(shipment) {
   selectedShipment.value = shipment
@@ -111,6 +119,45 @@ async function refreshAll() {
 
 async function handleShipmentCreated() {
   await refreshAll()
+}
+
+async function handlePackageCreated(shipment) {
+  await refreshAll()
+  selectedShipment.value = shipments.value.find((item) => item.id === shipment?.id) || shipment
+  activeTab.value = 'shipments'
+}
+
+async function handleRefreshPackage(shipment) {
+  refreshingPackageId.value = shipment.id
+  errorMessage.value = ''
+  try {
+    const updated = await api.refreshPackageTracking(shipment.id)
+    Object.assign(shipment, updated)
+    await refreshAll()
+  } catch (err) {
+    errorMessage.value = err.message
+  } finally {
+    refreshingPackageId.value = null
+  }
+}
+
+function formatTrackingDate(value) {
+  if (!value) return '—'
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+  const date = dateOnly ? new Date(`${value}T12:00:00`) : new Date(value)
+  return Number.isNaN(date.getTime()) ? value : dateOnly ? date.toLocaleDateString() : date.toLocaleString()
+}
+
+function estimatedTimeRemaining(value) {
+  if (!value) return ''
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+  const arrival = dateOnly ? new Date(`${value}T23:59:59`) : new Date(value)
+  const hours = Math.ceil((arrival.getTime() - Date.now()) / 3600000)
+  if (!Number.isFinite(hours)) return ''
+  if (hours <= 0) return 'Estimated arrival is due or past.'
+  const days = Math.floor(hours / 24)
+  const remainingHours = hours % 24
+  return `About ${days ? `${days}d ` : ''}${remainingHours}h remaining, based on the current estimate.`
 }
 
 async function handleEvaluate(shipment) {
@@ -183,14 +230,48 @@ onBeforeUnmount(() => {
     <PageSkeleton v-if="loading" :variant="activeTab === 'tracking' ? 'dashboard' : activeTab === 'shipments' ? 'shipments' : 'list'" />
 
     <template v-else>
-      <section v-if="activeTab==='shipments'" class="stage shipments-page"><div class="section-heading"><div><h2 class="section-title">Shipments</h2><p class="dim">Search, inspect, track, and evaluate shipments.</p></div><div class="heading-actions"><button class="refresh" :disabled="!selectedShipment || creatingTrackingLink" @click="createTrackingLink">{{ creatingTrackingLink ? 'Creating link…' : 'Share tracking link' }}</button><button class="refresh" @click="refreshAll">Refresh</button></div></div><ShipmentList :shipments="visibleShipments" :selected-id="selectedShipment?.id" :evaluating-id="evaluatingId" @evaluate="handleEvaluate" @select="selectedShipment = $event; publicTrackingUrl = ''" @track="handleTrackShipment" /><div v-if="publicTrackingUrl" class="share-link panel"><label for="public-track-link">Customer tracking link</label><input id="public-track-link" :value="publicTrackingUrl" readonly /><button @click="copyTrackingLink">Copy link</button></div><details class="new-shipment"><summary>+ Add or import shipment</summary><ShipmentIntakeForm @created="handleShipmentCreated" /></details><p class="sync-note">{{ refreshedAt ? `Last synced ${refreshedAt.toLocaleTimeString()}` : 'Waiting for shipment data…' }}</p></section>
+      <section v-if="activeTab==='shipments'" class="stage shipments-page">
+        <div class="section-heading"><div><h2 class="section-title">Shipments</h2><p class="dim">Search, inspect, track, and evaluate shipments.</p></div><div class="heading-actions"><button class="refresh" :disabled="!selectedShipment || creatingTrackingLink" @click="createTrackingLink">{{ creatingTrackingLink ? 'Creating link…' : 'Share tracking link' }}</button><button class="refresh" @click="refreshAll">Refresh</button></div></div>
+        <PackageTrackingForm @created="handlePackageCreated" />
+        <ShipmentList :shipments="visibleShipments" :selected-id="selectedShipment?.id" :evaluating-id="evaluatingId" @evaluate="handleEvaluate" @select="selectedShipment = $event; publicTrackingUrl = ''" @track="handleTrackShipment" />
+        <section v-if="selectedShipment" class="selected-shipment">
+          <div class="package-heading"><div><span class="mono dim">{{ selectedShipment.tracking_number ? 'PARCEL TRACKING' : 'SHIPMENT DETAILS' }}</span><h2>{{ selectedShipment.reference_number }}</h2></div><button v-if="selectedShipment.tracking_number" class="refresh" :disabled="refreshingPackageId === selectedShipment.id" @click="handleRefreshPackage(selectedShipment)">{{ refreshingPackageId === selectedShipment.id ? 'Checking carrier…' : 'Refresh carrier status' }}</button></div>
+          <div class="package-detail-grid">
+            <ShipmentMap :shipment="selectedShipment" />
+            <aside class="panel package-status-panel">
+              <dl class="package-facts">
+                <div><dt>Tracking number</dt><dd>{{ selectedShipment.tracking_number || '—' }}</dd></div>
+                <div><dt>Carrier</dt><dd>{{ selectedShipment.tracking_carrier || selectedShipment.carrier_name || 'Carrier not detected yet' }}</dd></div>
+                <div><dt>Carrier status</dt><dd>{{ selectedShipment.tracking_status || selectedShipment.status }}</dd></div>
+                <div><dt>Last scan location</dt><dd>{{ selectedShipment.tracking_location || 'Waiting for carrier scan' }}</dd></div>
+                <div><dt>Provider ETA</dt><dd>{{ formatTrackingDate(selectedShipment.carrier_eta_date || selectedShipment.carrier_eta_at) }}</dd></div>
+                <div><dt>{{ selectedShipment.ai_eta_source === 'aftership_ai' ? 'AI estimated delivery' : 'Current estimated delivery' }}</dt><dd>{{ formatTrackingDate(selectedShipment.ai_eta_date || selectedShipment.ai_eta_at || selectedShipment.eta_current) }} <small v-if="selectedShipment.ai_eta_source">({{ selectedShipment.ai_eta_source === 'aftership_ai' ? 'AfterShip AI' : 'Carrier estimate' }})</small><small v-if="selectedShipment.ai_eta_date || selectedShipment.ai_eta_at || selectedShipment.eta_current" class="eta-countdown">{{ estimatedTimeRemaining(selectedShipment.ai_eta_date || selectedShipment.ai_eta_at || selectedShipment.eta_current) }}</small></dd></div>
+                <div><dt>Last checked</dt><dd>{{ formatTrackingDate(selectedShipment.tracking_updated_at) }}</dd></div>
+              </dl>
+              <h3>Carrier scan history</h3>
+              <ol v-if="selectedShipment.tracking_events?.length" class="tracking-events">
+                <li v-for="(event, index) in [...selectedShipment.tracking_events].reverse()" :key="event.hash || `${event.checkpoint_time}-${index}`">
+                  <strong>{{ event.message || event.subtag_message || event.tag || 'Shipment update' }}</strong>
+                  <span>{{ event.location || [event.city, event.country_region_name].filter(Boolean).join(', ') || 'Location not supplied' }}</span>
+                  <small>{{ formatTrackingDate(event.checkpoint_time || event.created_at) }}</small>
+                </li>
+              </ol>
+              <p v-else class="dim no-events">No carrier scans received yet. Newly registered tracking numbers can take time to appear in carrier systems.</p>
+              <p v-if="selectedShipment.tracking_number" class="scan-note">Carrier scans are checkpoints, not continuous GPS. Map pins use carrier coordinates when available; otherwise a scan location may be approximate.</p>
+            </aside>
+          </div>
+        </section>
+        <div v-if="publicTrackingUrl" class="share-link panel"><label for="public-track-link">Customer tracking link</label><input id="public-track-link" :value="publicTrackingUrl" readonly /><button @click="copyTrackingLink">Copy link</button></div>
+        <details class="new-shipment"><summary>+ Add shipment manually</summary><ShipmentIntakeForm @created="handleShipmentCreated" /></details>
+        <p class="sync-note">{{ refreshedAt ? `Last synced ${refreshedAt.toLocaleTimeString()}` : 'Waiting for shipment data…' }}</p>
+      </section>
       <template v-else-if="activeTab==='tracking'">
       <AttentionList v-if="activeTab==='tracking'" :shipments="shipments" @review="focusShipment" @view-all="activeTab = 'risk'" />
       <TodayStrip v-if="activeTab==='tracking'" :today="summary.today" :shipments="shipments" />
-      <section v-if="activeTab==='tracking'" ref="fleetSection" id="gods-eye-view" class="fleet-view"><div class="fleet-switch"><span class="fleet-title"><small>LIVE FLEET DISTRIBUTION</small><strong>Jamaica & Caribbean Fleet Overview</strong></span><div><button :class="{active:fleetMode==='3d'}" @click="fleetMode='3d'">3D globe</button><button :class="{active:fleetMode==='2d'}" @click="fleetMode='2d'">2D map</button></div></div>
+      <section v-if="activeTab==='tracking'" ref="fleetSection" id="gods-eye-view" class="fleet-view"><div class="fleet-switch"><span class="fleet-title"><small>LIVE FLEET DISTRIBUTION</small><strong>Jamaica & Caribbean Fleet Overview</strong></span><div><button :class="{active:fleetMode==='3d'}" @click="fleetMode='3d'">3D globe</button><button :class="{active:fleetMode==='2d'}" @click="fleetMode='2d'">2D map</button><button :class="{active:fleetSimulation}" @click="toggleFleetSimulation">{{ fleetSimulation ? '■ Stop demo' : '▶ Run demo' }}</button></div></div>
         <div class="fleet-dashboard">
           <div class="fleet-map-column"><FleetGlobe v-if="fleetMode==='3d'" :shipments="shipments" :selected-id="selectedShipment?.id" @select="focusShipment" />
-            <FleetOverviewMap v-else :shipments="shipments" :selected-id="selectedShipment?.id" @select="focusShipment" /></div>
+            <FleetOverviewMap v-else :shipments="shipments" :selected-id="selectedShipment?.id" :simulation="fleetSimulation" @select="focusShipment" /></div>
           <aside class="activity-panel panel"><h3>Recent shipment activity</h3><article v-for="shipment in recentActivity" :key="shipment.id"><span class="activity-icon">↗</span><div><strong>{{ shipment.reference_number || 'Shipment update' }}</strong><p>{{ shipment.last_event_description }}</p><small>{{ shipment.tracking_updated_at ? new Date(shipment.tracking_updated_at).toLocaleString() : shipment.status }}</small></div></article><p v-if="!recentActivity.length" class="activity-empty">Shipment events will appear here when carriers or dispatchers report updates.</p></aside>
         </div>
       </section>
@@ -279,4 +360,5 @@ onBeforeUnmount(() => {
 }
 .section-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem}.heading-actions{display:flex;gap:.4rem}.refresh{padding:.38rem .62rem;font-size:.73rem}.share-link{display:grid;grid-template-columns:1fr auto;gap:.4rem .6rem;align-items:center;padding:.75rem;margin-bottom:.75rem}.share-link label{grid-column:1/-1;font-size:.75rem;color:var(--text-dim)}.share-link input{min-width:0}.share-link button{white-space:nowrap}.new-shipment{margin-bottom:1rem}.new-shipment>summary{display:inline-flex;align-items:center;padding:.55rem .8rem;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--signal);cursor:pointer;font-size:.82rem;font-weight:600}.new-shipment[open]>summary{margin-bottom:.7rem}.tracking-layout{display:grid;grid-template-columns:minmax(280px,.75fr) minmax(380px,1.25fr);gap:1rem;align-items:start}.shipment-column{min-width:0}.empty-map{padding:1rem;color:var(--text-dim);min-height:300px}.sync-note{margin:.75rem 0;color:var(--text-dim);font:.67rem var(--font-mono)}@media(max-width:850px){.tracking-layout{grid-template-columns:1fr}.stage{max-width:780px}}@media(max-width:500px){.section-heading{align-items:flex-start;flex-direction:column}.heading-actions{width:100%}.share-link{grid-template-columns:1fr}.share-link label{grid-column:auto}.share-link button{width:100%}}
 @media(max-width:900px){.fleet-dashboard{grid-template-columns:1fr}.activity-panel{display:grid;grid-template-columns:1fr 1fr;column-gap:.75rem}.activity-panel h3,.activity-empty{grid-column:1/-1}}@media(max-width:800px){.control-shell{padding:0;overflow:hidden}.stage{max-width:100%}.section-heading{align-items:flex-start}.heading-actions{display:flex;gap:.4rem;flex-wrap:wrap}.new-shipment>summary{font-size:.75rem}}@media(max-width:600px){.control-shell{padding:0}.fleet-switch{align-items:flex-start;flex-direction:column}.fleet-switch>div{width:100%}.fleet-switch button{flex:1}.activity-panel{display:block}}@media(max-width:390px){.section-heading{flex-wrap:wrap}.heading-actions{width:100%}.heading-actions button{flex:1}.refresh{font-size:.7rem}}
+.selected-shipment{margin-top:1rem}.package-heading{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin:1.2rem 0 .6rem}.package-heading .mono{font-size:.65rem;letter-spacing:.08em}.package-heading h2{font-size:.95rem;margin:.2rem 0}.package-detail-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(280px,.95fr);gap:1rem;align-items:start}.package-status-panel{padding:1rem}.package-facts{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:0}.package-facts dt{font:.63rem var(--font-mono);color:var(--text-dim);text-transform:uppercase}.package-facts dd{margin:.2rem 0 0;font-size:.78rem;overflow-wrap:anywhere}.package-facts dd small{display:block;margin-top:.2rem;color:var(--text-dim)}.package-status-panel h3{font-size:.8rem;margin:1.2rem 0 .4rem}.tracking-events{list-style:none;margin:0;padding:0;max-height:380px;overflow:auto}.tracking-events li{display:grid;gap:.18rem;padding:.65rem 0;border-bottom:1px solid var(--line)}.tracking-events li strong{font-size:.75rem}.tracking-events li span,.tracking-events li small{font-size:.69rem;color:var(--text-dim)}.no-events,.scan-note{font-size:.72rem;line-height:1.45;color:var(--text-dim)}.scan-note{padding-top:.65rem;border-top:1px solid var(--line)}@media(max-width:850px){.package-detail-grid{grid-template-columns:1fr}}@media(max-width:500px){.package-heading{align-items:flex-start;flex-direction:column}.package-facts{grid-template-columns:1fr}}
 </style>

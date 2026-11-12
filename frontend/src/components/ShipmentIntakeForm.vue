@@ -15,6 +15,8 @@ const form = reactive({
   preferred_contact_channel: 'email',
   current_latitude: '',
   current_longitude: '',
+  transport_mode: 'truck',
+  live_tracking_id: '',
 })
 const submitting = ref(false)
 const error = ref('')
@@ -33,7 +35,7 @@ async function submit() {
     })
     Object.assign(form, {
       reference_number: '', origin: '', destination: '',
-      eta_original: '', eta_current: '', last_event_description: '', customer_contact: '', preferred_contact_channel: 'email', current_latitude: '', current_longitude: '',
+      eta_original: '', eta_current: '', last_event_description: '', customer_contact: '', preferred_contact_channel: 'email', current_latitude: '', current_longitude: '', transport_mode: 'truck', live_tracking_id: '',
     })
     emit('created')
   } catch (err) {
@@ -54,6 +56,10 @@ async function submit() {
       <input v-model="form.reference_number" placeholder="Reference # (e.g. SHP-1042)" required />
       <input v-model="form.origin" placeholder="Origin" />
       <input v-model="form.destination" placeholder="Destination" />
+    </div>
+    <div class="row">
+      <select v-model="form.transport_mode" aria-label="Shipment mode"><option value="truck">Land shipment</option><option value="ship">Sea shipment</option><option value="plane">Air shipment</option></select>
+      <input v-model="form.live_tracking_id" :placeholder="form.transport_mode === 'truck' ? 'Traccar device unique ID (optional)' : form.transport_mode === 'ship' ? 'Vessel MMSI (9 digits, optional)' : 'Aircraft ICAO24 (6 hex, optional)'" />
     </div>
     <div class="row">
       <label class="field">
