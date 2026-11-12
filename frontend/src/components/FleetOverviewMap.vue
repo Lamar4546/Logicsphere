@@ -40,7 +40,8 @@ function geometry(s) {
   const live = point(s.current_latitude, s.current_longitude)
   const origin = point(s.origin_latitude, s.origin_longitude)
   const destination = point(s.destination_latitude, s.destination_longitude)
-  const line = road || (origin && destination ? [origin, destination] : null)
+  const remainingLeg = s.simulation_demo && live && destination ? [live, destination] : null
+  const line = remainingLeg || road || (origin && destination ? [origin, destination] : null)
   return { live, road, line, origin, destination, anchor: live || origin || (road && road[0]) || null }
 }
 
@@ -49,7 +50,7 @@ const simulatedShipments = computed(() => props.simulation ? demoRoutes.map((rou
   const live = [route.start[0] + (route.end[0] - route.start[0]) * progress, route.start[1] + (route.end[1] - route.start[1]) * progress]
   const remaining = Math.max(1, Math.ceil(route.minutes * (1 - progress)))
   const arrival = new Date(Date.now() + remaining * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  return { ...route, current_latitude: live[0], current_longitude: live[1], origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${arrival} · ${remaining} min`, progress }
+  return { ...route, simulation_demo: true, current_latitude: live[0], current_longitude: live[1], origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${arrival} · ${remaining} min`, progress }
 }) : [])
 const items = computed(() => [...props.shipments.filter(isActive), ...simulatedShipments.value].map((s) => ({ s, g: geometry(s) })))
 const plotted = computed(() => items.value.filter((i) => i.g.anchor))
@@ -115,15 +116,26 @@ function render() {
     const state = stateOf(s)
     const color = colors[state]
     const selected = s.id === props.selectedId
+    if (s.simulation_demo && g.origin) {
+      L.circleMarker(g.origin, { radius: 4, color, weight: 2, fillColor: '#fff', fillOpacity: 1 })
+        .bindTooltip(`${escapeHtml(s.reference_number)} · ORIGIN`)
+        .addTo(layer)
+    }
     if (g.destination) {
-      L.circleMarker(g.destination, { radius: 4, color, weight: 1.5, fillColor: '#fff', fillOpacity: 1 }).addTo(layer)
+      const destination = L.circleMarker(g.destination, { radius: s.simulation_demo ? 7 : 4, color, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(layer)
+      if (s.simulation_demo) destination.bindTooltip(`DESTINATION · ${escapeHtml(s.etaLabel)}`, { permanent: true, direction: 'top', offset: [0, -5], className: 'fleet-eta-label' })
     }
     const planned = !g.live // hollow marker = planned start, no live position yet
     const reference = escapeHtml(s.reference_number)
     const reason = escapeHtml(s.risk_reason || 'Delivery window threatened')
     const eta = escapeHtml(s.etaLabel)
     const marker = L.marker(g.anchor, { icon: L.divIcon({ className: 'fleet-marker-shell', html: `<span class="fleet-marker ${modeOf(s)} ${state}${selected ? ' selected' : ''}">${iconOf(s)}</span>`, iconSize: [36, 36], iconAnchor: [18, 18] }) })
-    marker.bindTooltip(`${iconOf(s)} ${reference} · ${modeOf(s).toUpperCase()}${state === 'normal' ? '' : ` · ${state.replace('_', ' ').toUpperCase()}`}${eta ? ` · ETA ${eta}` : s.tracking_number && g.live ? ' · latest carrier scan' : planned ? ' · no live position yet' : ' · live GPS'}${s.risk_reason ? ` · ${reason}` : ''}`)
+    marker.bindTooltip(`${iconOf(s)} ${reference}${eta ? ` · ${state === 'normal' ? 'ON TIME' : `⚠ ${state.replace('_', ' ').toUpperCase()}`} · ETA ${eta}` : ` · ${modeOf(s).toUpperCase()}${state === 'normal' ? '' : ` · ${state.replace('_', ' ').toUpperCase()}`}${s.tracking_number && g.live ? ' · latest carrier scan' : planned ? ' · no live position yet' : ' · live GPS'}`}${!eta && s.risk_reason ? ` · ${reason}` : ''}`, {
+      permanent: Boolean(eta),
+      direction: 'right',
+      offset: [13, 0],
+      className: eta ? 'fleet-eta-label' : '',
+    })
       .bindPopup(`<strong>${iconOf(s)} ${reference}</strong><br>${state === 'normal' ? 'On schedule' : `AT RISK · ${reason}`}${eta ? `<br>Estimated arrival: ${eta}` : ''}`)
       .on('click', () => emit('select', s))
       .addTo(layer)
@@ -193,6 +205,9 @@ onBeforeUnmount(() => { window.clearInterval(simulationTimer); map?.remove() })
 .map :deep(.fleet-marker.at_risk) { background:var(--risk-high); }
 .map :deep(.fleet-marker.delayed) { background:var(--risk-critical); }
 .map :deep(.fleet-marker.selected) { width:36px; height:36px; transform:translate(-2px,-2px); box-shadow:0 0 0 4px rgba(255,255,255,.3), 0 3px 12px rgba(0,0,0,.5); }
+.map :deep(.leaflet-tooltip.fleet-eta-label) { max-width:220px; padding:.38rem .5rem; border:1px solid var(--line); border-radius:6px; background:rgba(8,18,30,.94); color:#fff; font:.64rem var(--font-mono); white-space:normal; box-shadow:0 3px 12px rgba(0,0,0,.3); }
+.map :deep(.leaflet-tooltip-right.fleet-eta-label::before) { border-right-color:rgba(8,18,30,.94); }
+.map :deep(.leaflet-tooltip-top.fleet-eta-label::before) { border-top-color:rgba(8,18,30,.94); }
 .pulse { display: inline-block; width: .48rem; height: .48rem; margin-right: .3rem; border-radius: 50%; background: currentColor; animation: sim-pulse 1s infinite; }
 @keyframes sim-pulse { 50% { opacity: .25; transform: scale(.72); } }
 @media (max-width: 600px) { .map { height: 260px; } }
