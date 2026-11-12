@@ -16,15 +16,21 @@ let map, layer, hasFitted = false
 let simulationTimer
 
 const demoRoutes = [
-  { id: 'demo-air', reference_number: 'DEMO-AIR-204', mode: 'air', status: 'in_transit', start: [18.5037, -77.9134], end: [25.7933, -80.2906], minutes: 18 },
-  { id: 'demo-land', reference_number: 'DEMO-LAND-118', mode: 'road', status: 'in_transit', start: [17.9712, -76.7936], end: [18.4762, -77.8939], minutes: 8 },
-  { id: 'demo-sea', reference_number: 'DEMO-SEA-052', mode: 'ocean', status: 'in_transit', start: [17.96, -76.8], end: [10.66, -61.51], minutes: 32 },
+  { id: 'demo-air', reference_number: 'DEMO-AIR-204', mode: 'air', transport_mode: 'plane', status: 'in_transit', start: [18.5037, -77.9134], end: [25.7933, -80.2906], minutes: 48 },
+  { id: 'demo-land', reference_number: 'DEMO-LAND-118', mode: 'road', transport_mode: 'truck', status: 'at_risk', risk_reason: 'Traffic delay · arrival may miss delivery window', start: [17.9712, -76.7936], end: [18.4762, -77.8939], minutes: 76 },
+  { id: 'demo-sea', reference_number: 'DEMO-SEA-052', mode: 'ocean', transport_mode: 'ship', status: 'at_risk', risk_reason: 'Weather slowdown · arrival under review', start: [17.96, -76.8], end: [10.66, -61.51], minutes: 225 },
 ]
 
 const hasValue = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
 const point = (lat, lng) => (hasValue(lat) && hasValue(lng) ? [Number(lat), Number(lng)] : null)
 const isActive = (s) => !['delivered', 'cancelled'].includes(s.status)
 const stateOf = (s) => (s.status === 'delayed' ? 'delayed' : s.status === 'at_risk' ? 'at_risk' : 'normal')
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]))
+function modeOf(s) {
+  const value = `${s.transport_mode || ''} ${s.mode || ''} ${s.shipment_type || ''}`.toLowerCase()
+  return /air|plane|flight/.test(value) ? 'air' : /sea|ship|ocean|vessel/.test(value) ? 'sea' : 'land'
+}
+const iconOf = (s) => ({ air: '✈', sea: '🚢', land: '🚚' }[modeOf(s)])
 
 // Everything we can draw for one shipment, from best to weakest source:
 // live position > road route > straight line between the two endpoints.
@@ -41,7 +47,9 @@ function geometry(s) {
 const simulatedShipments = computed(() => props.simulation ? demoRoutes.map((route) => {
   const progress = ((simulationStep.value * 0.012 + (route.id === 'demo-air' ? 0.08 : route.id === 'demo-sea' ? 0.31 : 0.62)) % 1)
   const live = [route.start[0] + (route.end[0] - route.start[0]) * progress, route.start[1] + (route.end[1] - route.start[1]) * progress]
-  return { ...route, current_latitude: live[0], current_longitude: live[1], origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${Math.max(1, Math.ceil(route.minutes * (1 - progress)))} min`, progress }
+  const remaining = Math.max(1, Math.ceil(route.minutes * (1 - progress)))
+  const arrival = new Date(Date.now() + remaining * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return { ...route, current_latitude: live[0], current_longitude: live[1], origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${arrival} · ${remaining} min`, progress }
 }) : [])
 const items = computed(() => [...props.shipments.filter(isActive), ...simulatedShipments.value].map((s) => ({ s, g: geometry(s) })))
 const plotted = computed(() => items.value.filter((i) => i.g.anchor))
@@ -111,14 +119,12 @@ function render() {
       L.circleMarker(g.destination, { radius: 4, color, weight: 1.5, fillColor: '#fff', fillOpacity: 1 }).addTo(layer)
     }
     const planned = !g.live // hollow marker = planned start, no live position yet
-    L.circleMarker(g.anchor, {
-      radius: selected ? 11 : state === 'normal' ? 7 : 9,
-      color: planned ? color : '#fff',
-      weight: selected ? 3 : 2,
-      fillColor: color,
-      fillOpacity: planned ? 0.25 : 1,
-    })
-      .bindTooltip(`${s.reference_number} · ${s.mode ? String(s.mode).toUpperCase() : s.status}${s.etaLabel ? ` · ETA ${s.etaLabel}` : s.tracking_number && g.live ? ' · latest carrier scan' : planned ? ' · no live position yet' : ' · live GPS'}`)
+    const reference = escapeHtml(s.reference_number)
+    const reason = escapeHtml(s.risk_reason || 'Delivery window threatened')
+    const eta = escapeHtml(s.etaLabel)
+    const marker = L.marker(g.anchor, { icon: L.divIcon({ className: 'fleet-marker-shell', html: `<span class="fleet-marker ${modeOf(s)} ${state}${selected ? ' selected' : ''}">${iconOf(s)}</span>`, iconSize: [36, 36], iconAnchor: [18, 18] }) })
+    marker.bindTooltip(`${iconOf(s)} ${reference} · ${modeOf(s).toUpperCase()}${state === 'normal' ? '' : ` · ${state.replace('_', ' ').toUpperCase()}`}${eta ? ` · ETA ${eta}` : s.tracking_number && g.live ? ' · latest carrier scan' : planned ? ' · no live position yet' : ' · live GPS'}${s.risk_reason ? ` · ${reason}` : ''}`)
+      .bindPopup(`<strong>${iconOf(s)} ${reference}</strong><br>${state === 'normal' ? 'On schedule' : `AT RISK · ${reason}`}${eta ? `<br>Estimated arrival: ${eta}` : ''}`)
       .on('click', () => emit('select', s))
       .addTo(layer)
   })
@@ -183,6 +189,10 @@ onBeforeUnmount(() => { window.clearInterval(simulationTimer); map?.remove() })
 .empty span { color: var(--text-dim); font-size: .8rem; }
 .note { margin: .6rem 0 0; font-size: .72rem; }
 .sim-note { color: var(--risk-low); font: .67rem var(--font-mono); letter-spacing: .03em; }
+.map :deep(.fleet-marker) { display:grid; place-items:center; width:32px; height:32px; border:2px solid #fff; border-radius:50%; background:var(--signal); color:#fff; box-shadow:0 2px 9px rgba(0,0,0,.45); font-size:17px; line-height:1; }
+.map :deep(.fleet-marker.at_risk) { background:var(--risk-high); }
+.map :deep(.fleet-marker.delayed) { background:var(--risk-critical); }
+.map :deep(.fleet-marker.selected) { width:36px; height:36px; transform:translate(-2px,-2px); box-shadow:0 0 0 4px rgba(255,255,255,.3), 0 3px 12px rgba(0,0,0,.5); }
 .pulse { display: inline-block; width: .48rem; height: .48rem; margin-right: .3rem; border-radius: 50%; background: currentColor; animation: sim-pulse 1s infinite; }
 @keyframes sim-pulse { 50% { opacity: .25; transform: scale(.72); } }
 @media (max-width: 600px) { .map { height: 260px; } }

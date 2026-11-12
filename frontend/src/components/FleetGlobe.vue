@@ -13,15 +13,17 @@ let lastFocusedId = null
 const simulationStep = ref(0)
 let simulationTimer
 const demoRoutes = [
-  { id: 'demo-air', reference_number: 'DEMO-AIR-204', mode: 'air', transport_mode: 'plane', status: 'in_transit', start: [18.5037, -77.9134], end: [25.7933, -80.2906], minutes: 18 },
-  { id: 'demo-land', reference_number: 'DEMO-LAND-118', mode: 'road', transport_mode: 'truck', status: 'in_transit', start: [17.9712, -76.7936], end: [18.4762, -77.8939], minutes: 8 },
-  { id: 'demo-sea', reference_number: 'DEMO-SEA-052', mode: 'ocean', transport_mode: 'ship', status: 'in_transit', start: [17.96, -76.8], end: [10.66, -61.51], minutes: 32 },
+  { id: 'demo-air', reference_number: 'DEMO-AIR-204', mode: 'air', transport_mode: 'plane', status: 'in_transit', start: [18.5037, -77.9134], end: [25.7933, -80.2906], minutes: 48 },
+  { id: 'demo-land', reference_number: 'DEMO-LAND-118', mode: 'road', transport_mode: 'truck', status: 'at_risk', risk_reason: 'Traffic delay · arrival may miss delivery window', start: [17.9712, -76.7936], end: [18.4762, -77.8939], minutes: 76 },
+  { id: 'demo-sea', reference_number: 'DEMO-SEA-052', mode: 'ocean', transport_mode: 'ship', status: 'at_risk', risk_reason: 'Weather slowdown · arrival under review', start: [17.96, -76.8], end: [10.66, -61.51], minutes: 225 },
 ]
 const simulatedShipments = computed(() => props.simulation ? demoRoutes.map((route) => {
   const progress = ((simulationStep.value * 0.012 + (route.id === 'demo-air' ? 0.08 : route.id === 'demo-sea' ? 0.31 : 0.62)) % 1)
   const latitude = route.start[0] + (route.end[0] - route.start[0]) * progress
   const longitude = route.start[1] + (route.end[1] - route.start[1]) * progress
-  return { ...route, current_latitude: latitude, current_longitude: longitude, origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${Math.max(1, Math.ceil(route.minutes * (1 - progress)))} min`, route_geometry: { coordinates: [[route.start[1], route.start[0]], [route.end[1], route.end[0]]] } }
+  const remaining = Math.max(1, Math.ceil(route.minutes * (1 - progress)))
+  const arrival = new Date(Date.now() + remaining * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return { ...route, current_latitude: latitude, current_longitude: longitude, origin_latitude: route.start[0], origin_longitude: route.start[1], destination_latitude: route.end[0], destination_longitude: route.end[1], etaLabel: `${arrival} · ${remaining} min`, route_geometry: { coordinates: [[route.start[1], route.start[0]], [route.end[1], route.end[0]]] } }
 }) : [])
 const displayedShipments = computed(() => [...props.shipments, ...simulatedShipments.value])
 const counts = computed(() => displayedShipments.value.reduce((result, shipment) => {
@@ -69,7 +71,7 @@ function colorFor(shipment) {
   return Cesium.Color.fromCssColorString(styles.getPropertyValue(token).trim() || '#3b91df')
 }
 function iconFor(type) {
-  return type === 'plane' ? '✈' : type === 'ship' ? '◆' : '●'
+  return type === 'plane' ? '✈' : type === 'ship' ? '🚢' : '🚚'
 }
 function markerSvg(type) {
   const paths = {
@@ -109,7 +111,7 @@ function render() {
       id: String(shipment.id), name: shipment.reference_number || 'Shipment', position,
       orientation: type === 'plane' ? new Cesium.CallbackProperty(() => Cesium.Transforms.headingPitchRollQuaternion(Cesium.Cartesian3.fromDegrees(...point), new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(heading), 0, 0)), false) : undefined,
       billboard: { image: markerSvg(type), width: 24, height: 24, color, rotation: new Cesium.CallbackProperty(() => -Cesium.Math.toRadians(heading), false), alignedAxis: Cesium.Cartesian3.UNIT_Z, heightReference: type === 'truck' || type === 'ship' ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE },
-      label: { text: `${iconFor(type)}  ${shipment.reference_number || 'Shipment'}${shipment.etaLabel ? ` · ETA ${shipment.etaLabel}` : ''}`, font: '12px sans-serif', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -18), distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3500000) },
+      label: { text: `${iconFor(type)}  ${shipment.reference_number || 'Shipment'}${shipment.status === 'at_risk' || shipment.status === 'delayed' ? ' · ⚠ AT RISK' : ''}${shipment.etaLabel ? ` · ETA ${shipment.etaLabel}` : ''}`, font: '12px sans-serif', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK, outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -18), distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3500000) },
       properties: { shipmentId: shipment.id, type, heading },
     })
   })
@@ -160,7 +162,7 @@ onBeforeUnmount(() => { window.clearInterval(simulationTimer); if (viewer && !vi
 
 <template>
   <section class="panel globe-panel">
-    <header class="globe-head"><div><span class="mono dim">GOD’S EYE VIEW</span><h2>3D shipment tracking</h2></div><div class="legend"><span>✈ {{ counts.plane }} air</span><span>◆ {{ counts.ship }} sea</span><span>● {{ counts.truck }} road</span><button type="button" @click="focusAll">Fit all</button></div></header>
+    <header class="globe-head"><div><span class="mono dim">GOD’S EYE VIEW</span><h2>3D shipment tracking</h2></div><div class="legend"><span>✈ {{ counts.plane }} air</span><span>🚢 {{ counts.ship }} sea</span><span>🚚 {{ counts.truck }} road</span><button type="button" @click="focusAll">Fit all</button></div></header>
     <div class="globe-wrap"><div ref="container" class="globe"></div><p v-if="error" class="globe-error">{{ error }}</p><p v-else-if="!displayedShipments.some((shipment) => coordinates(shipment))" class="globe-empty">Shipment positions appear here when your tracking providers send coordinates.</p></div>
     <p v-if="simulation" class="globe-note sim-note">● DEMO SIMULATION · air, land, and sea positions and ETAs update every second.</p><p v-else class="globe-note">Positions and headings use shipment telemetry. Configure aviation, AIS, and road GPS feeds to track each transport type live.</p>
   </section>
