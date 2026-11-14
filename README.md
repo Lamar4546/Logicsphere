@@ -155,7 +155,7 @@ python -m unittest tests.test_sender
 
 ### Observe the agent workflow
 
-Add `MINIMAX_API_KEY` (and optionally `MINIMAX_MODEL`) to `backend/.env`,
+Add `GROQ_API_KEY` (and optionally `GROQ_MODEL`) to `backend/.env`,
 start the backend, then run:
 
 ```bash
@@ -165,8 +165,8 @@ python demo_agent_workflow.py
 
 The demo creates an 8-hour delay that is resolved autonomously and an
 80-hour critical delay that appears in the Command Center's **Exceptions**
-tab for human approval. Its printed `ai_provider` should be `minimax`; if
-MiniMax is unavailable it will be `deterministic_fallback` and the logistics
+tab for human approval. Its printed `ai_provider` should be `groq`; if
+Groq is unavailable it will be `deterministic_fallback` and the logistics
 workflow still completes safely.
 
 ## What's deliberately NOT in this slice

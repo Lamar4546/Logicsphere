@@ -2,7 +2,7 @@
 
 Prerequisites:
   1. Apply the Supabase schema/migrations and set backend/.env.
-  2. Set MINIMAX_API_KEY in backend/.env to observe MiniMax reasoning.
+  2. Set GROQ_API_KEY in backend/.env to observe Groq reasoning.
   3. Start the backend: python run.py
   4. Run: python demo_agent_workflow.py
 

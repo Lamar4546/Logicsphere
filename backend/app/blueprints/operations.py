@@ -350,7 +350,7 @@ def cancel_order(order_id):
 @operations_bp.post("/assistant")
 @login_required
 def ask_operations_assistant():
-    """Return MiniMax advice without allowing conversational side effects."""
+    """Return Groq-backed advice without allowing conversational side effects."""
     payload, org = request.get_json(force=True) or {}, g.current_user["org"]
     message = str(payload.get("message") or "").strip()
     if not message:
@@ -364,7 +364,7 @@ def ask_operations_assistant():
     context = {"recent_orders": orders, "inventory": inventory}
     if not is_configured():
         return jsonify({
-            "reply": "Hugging Face has not been configured on this backend yet. An administrator must add HF_TOKEN in the hosting service’s environment settings, then redeploy. I will not make changes from chat.",
+            "reply": "Groq has not been configured on this backend yet. An administrator must add GROQ_API_KEY in the hosting service’s environment settings, then redeploy. I will not make changes from chat.",
             "provider": "deterministic_fallback", "provider_status": "not_configured",
         })
     try:
@@ -374,9 +374,9 @@ def ask_operations_assistant():
         ], temperature=0.35)
         return jsonify({"reply": reply.strip(), "provider": provider_name(), "provider_status": "ready"})
     except MiniMaxError:
-        log.exception("MiniMax operations assistant request failed")
+        log.exception("AI operations assistant request failed")
         return jsonify({
-            "reply": "The configured AI provider did not respond. Check the Render service logs for the Hugging Face request failure, then try again. I will not make changes from chat.",
+            "reply": "The configured AI provider did not respond. Check the backend service logs, then try again. I will not make changes from chat.",
             "provider": "deterministic_fallback", "provider_status": "request_failed",
         })
 

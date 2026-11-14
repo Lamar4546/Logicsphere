@@ -30,7 +30,7 @@ The main risk workflow connects shipment intake and tracking to recommendation a
 
 Agent runs and material workflow changes are written to `agent_runs` and `audit_events`. The dashboard API aggregates at-risk shipments, open alerts, pending recommendations, and draft communications for the signed-in organization.
 
-An AI client supports MiniMax-compatible chat/JSON requests and environment-variable aliases for provider, URL, and model configuration. Agent paths include deterministic fallback behavior when AI is not configured or a request fails. Policy thresholds and approval rules are exposed to the Operations UI. AI output assists reasoning; backend policy and execution code control transactional actions.
+An AI client supports Groq-compatible chat/JSON requests and environment-variable aliases for provider, URL, and model configuration. Agent paths include deterministic fallback behavior when AI is not configured or a request fails. Policy thresholds and approval rules are exposed to the Operations UI. AI output assists reasoning; backend policy and execution code control transactional actions.
 
 ## 4. Operations workspace
 
@@ -98,6 +98,6 @@ The repository includes sender and integration test modules plus an auth test fi
 | Frontend | Vue 3, Vue Router, Pinia, Vite, Leaflet, Cesium, Lucide Vue |
 | Backend | Python, Flask, Flask-CORS, Supabase Python client, Requests, Gunicorn |
 | Database and identity | Supabase Auth, PostgreSQL, SQL migrations, row-level security |
-| AI integration | MiniMax-compatible chat/JSON client with deterministic fallback paths |
+| AI integration | Groq-compatible chat/JSON client with deterministic fallback paths |
 | Maps | OpenStreetMap tiles, Leaflet, Cesium globe visualization |
 | Notifications | SMS, WhatsApp, and email provider adapters |

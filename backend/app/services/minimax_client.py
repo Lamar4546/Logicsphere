@@ -1,24 +1,10 @@
-"""
-MiniMax client — OpenAI-compatible Chat Completions API.
-https://api.minimax.io/v1/chat/completions
-
-Used everywhere an agent needs reasoning/explanation/drafting, per the
-project's architecture principle: MiniMax handles reasoning, planning and
-explanations; it never executes anything transactional itself (that stays
-in deterministic backend code, gated by human approval — see
-workflow_service.py). Risk classification now reasons through MiniMax too,
-but the *decision to act* on that classification still requires a human
-approval step downstream — this client only ever produces text/JSON that
-other code interprets, it has no path to write or execute anything itself.
-"""
+"""Groq OpenAI-compatible chat client used by reasoning-only agent paths."""
 import json
 import os
 import requests
 
-DEFAULT_API_URL = "https://router.huggingface.co/v1/chat/completions"
-# MiniMax's current OpenAI-compatible text endpoint supports this model.
-# Deployments can still override it with MINIMAX_MODEL.
-DEFAULT_MODEL = "openai/gpt-oss-120b:fastest"
+DEFAULT_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
 
 class MiniMaxError(RuntimeError):
@@ -27,36 +13,35 @@ class MiniMaxError(RuntimeError):
 
 def is_configured() -> bool:
     """Whether a supported OpenAI-compatible provider has a key."""
-    return bool(os.environ.get("HF_TOKEN") or os.environ.get("AI_API_KEY") or os.environ.get("MINIMAX_API_KEY"))
+    return bool(os.environ.get("GROQ_API_KEY") or os.environ.get("AI_API_KEY") or os.environ.get("MINIMAX_API_KEY"))
 
 
 def provider_name() -> str:
     """Human-safe provider label; credentials are never returned."""
-    default = "huggingface" if os.environ.get("HF_TOKEN") else "minimax"
+    default = "groq" if os.environ.get("GROQ_API_KEY") or os.environ.get("AI_API_KEY") else "minimax"
     return os.environ.get("AI_PROVIDER", default).strip().lower() or default
 
 
 def _api_key() -> str | None:
-    # MINIMAX_* remains supported so existing deployments do not break.
-    return os.environ.get("HF_TOKEN") or os.environ.get("AI_API_KEY") or os.environ.get("MINIMAX_API_KEY")
+    # Generic and MiniMax variables remain supported for existing deployments.
+    return os.environ.get("GROQ_API_KEY") or os.environ.get("AI_API_KEY") or os.environ.get("MINIMAX_API_KEY")
 
 
 def _api_url() -> str:
-    return os.environ.get("HF_API_URL") or os.environ.get("AI_API_URL") or os.environ.get("MINIMAX_API_URL") or DEFAULT_API_URL
+    return os.environ.get("GROQ_API_URL") or os.environ.get("AI_API_URL") or os.environ.get("MINIMAX_API_URL") or DEFAULT_API_URL
 
 
 def _model() -> str:
-    return os.environ.get("HF_MODEL") or os.environ.get("AI_MODEL") or os.environ.get("MINIMAX_MODEL") or DEFAULT_MODEL
+    return os.environ.get("GROQ_MODEL") or os.environ.get("AI_MODEL") or os.environ.get("MINIMAX_MODEL") or DEFAULT_MODEL
 
 
 def chat(messages: list[dict], *, json_mode: bool = False, temperature: float = 0.3) -> str:
     """
-    Calls MiniMax chat completions and returns the assistant message content
-    as a string. Raises MiniMaxError on any failure — callers are
-    responsible for deciding whether to fall back to deterministic logic
-    (see risk_agent.py, central_manager.py, communication_agent.py), so a
-    MiniMax outage never silently corrupts a recommendation, it either
-    degrades to a known-safe rule-based path or surfaces clearly.
+    Calls Groq chat completions and returns the assistant message content
+    as a string. Raises MiniMaxError on failure; callers decide whether to
+    fall back to deterministic logic (see risk_agent.py, central_manager.py,
+    communication_agent.py), so provider outages either degrade to a
+    known-safe rule-based path or surface clearly.
     """
     api_key = _api_key()
     if not api_key:
@@ -69,9 +54,7 @@ def chat(messages: list[dict], *, json_mode: bool = False, temperature: float = 
         "stream": False,
     }
     if json_mode:
-        # MiniMax's OpenAI-compatible endpoint accepts response_format for
-        # structured output; if the deployed model/version ignores it, the
-        # caller's JSON parsing still has a repair/fallback path.
+        # Groq supports response_format for JSON-mode chat completions.
         payload["response_format"] = {"type": "json_object"}
 
     try:
@@ -102,4 +85,4 @@ def chat_json(messages: list[dict], *, temperature: float = 0.2) -> dict:
     try:
         return json.loads(content)
     except json.JSONDecodeError as exc:
-        raise MiniMaxError(f"MiniMax did not return valid JSON: {content}") from exc
+        raise MiniMaxError(f"{provider_name()} did not return valid JSON: {content}") from exc

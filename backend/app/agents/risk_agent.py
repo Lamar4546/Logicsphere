@@ -96,7 +96,7 @@ class RiskAgent(BaseAgent):
         return {"low": 0.6, "medium": 0.75, "high": 0.85, "critical": 0.95}[severity]
 
     def _reason_about_delay(self, shipment, delay_hours, severity):
-        """Ask MiniMax for operational context, never for the safety decision.
+        """Ask the AI provider for operational context, never for the safety decision.
 
         Deterministic thresholds remain the authority for risk severity so a
         model response cannot reduce a safety gate or create a financial action.

@@ -1,0 +1,1 @@
+Groq key moved to backend/.env as GROQ_API_KEY; value intentionally not duplicated here.
